@@ -27,6 +27,9 @@
 - **Вебинары** (1.5): регистрация на трансляцию с лимитом мест и ссылкой-приглашением, напоминания зарегистрированным, отчёт по участникам с фактическим временем присутствия.
 - **«Спросите видеотеку»** (1.5): вопрос обычными словами — ответ по расшифровкам со ссылками на конкретные секунды видео.
 - **Качество просмотра** (1.5): плеер измеряет время старта, паузы на подгрузку и сбои; раздел «Качество» в панели администратора с разрезами по дням, устройствам и видео.
+- **Премьеры** (1.6): показ видео в назначенный час с обратным отсчётом, чатом и напоминаниями подписчикам.
+- **Совместный просмотр** (1.6): комната «Смотрим вместе» с общей паузой, перемоткой и чатом.
+- **Живые субтитры эфира** (1.6) и **экраны-витрины** для телевизоров в холле; **видео-SEO** для публичных роликов.
 - В эфире: **опросы**, **вопросы ведущему** с голосованием, **напоминание** о запланированном эфире и файл календаря (.ics).
 - **Уведомления в Telegram** (привязка через бота) и вход через **корпоративный SSO** (OpenID Connect).
 - **Подсказки и конечные заставки** в плеере (как на YouTube), **очередь просмотра**, режим **«только звук»**, **повтор чата** в записях эфиров, панель **«Текст на экране»** для видео со слайдами.
@@ -260,6 +263,16 @@ corpvideo ports             # какие порты должны быть отк
 - **Качество просмотра** (Администрирование → Качество): медиана и 95-й процентиль времени до первого кадра, доля ребуферизации, доля сбоев, число сессий, средний битрейт, оценка «хорошо / приемлемо / плохо»; графики по дням, таблицы по устройствам и разрешениям, худшие видео и последние ошибки, CSV. Данные обезличены и хранятся `qoe.retention_days` дней.
 - Маршруты `/api/live/:id/registration|attendance|attendees|registration-link`, `POST /api/playback`, `GET /api/admin/quality`, `POST /api/search/ask`.
 
+## Премьеры, совместный просмотр, экраны и живые субтитры — версия 1.6
+
+- **Премьера видео** (Студия → видео → Сведения): укажите дату и время отложенной публикации и включите «Премьера». До назначенного часа на странице видео идёт обратный отсчёт и работает чат, медиафайлы не отдаются; в назначенное время показ начинается у всех одновременно и с одной секунды. Подписчики канала получают уведомление за 30 минут и в момент начала.
+- **Смотрим вместе** (кнопка на странице видео): комната с общей паузой, перемоткой и скоростью, чатом и списком участников. Ссылку можно разослать коллегам; опоздавший подхватывает текущую позицию. Управление — у ведущего или у всех (настройка `party.everyone_controls`).
+- **Живые субтитры эфира** (Студия → Трансляции → Настройки): речь распознаётся по ходу трансляции и показывается строкой поверх видео, зритель может их выключить. У записи эфира субтитры появляются сразу отдельной дорожкой. Нужен подключённый сервер ASR и настройка `live.captions`.
+- **Экраны** (Администрирование → Экраны): витрина для телевизора в холле — плейлист, категория или свежие видео крутятся по кругу в полноэкранном режиме без входа. Ссылка-токен меняется одной кнопкой, видно, когда экран последний раз был на связи. Личные видео на экран не попадают.
+- **«Ваше видео посмотрели»**: автор узнаёт о первом просмотре личной записи коллегой (`notify.video_watched`).
+- **Видео-SEO**: `schema.org/VideoObject` на страницах публичных видео, `/sitemap-video.xml` и `robots.txt` (`seo.video`).
+- Маршруты `/api/videos/:id/premiere`, `/api/videos/:id/party`, `/api/party/:code/*`, `/api/live/:id/captions`, `/api/screens/:token/playlist`, `/api/admin/screens`.
+
 ## Почта (SMTP)
 
 Письма подтверждения адреса, одобрения регистрации, сброса пароля, приглашения, уведомления администраторов о новых регистрациях, уведомления о новых видео и ответах. Настройки → Почта: сервер, порт, TLS, учётная запись, адрес отправителя, кнопка «Отправить тестовое письмо». Без SMTP портал работает, а подтверждение адреса можно отключить.
@@ -284,6 +297,8 @@ curl "https://video.company.ru/api/search?q=насос"
 Полезные вызовы 1.4: `GET/POST /api/courses`, `GET /api/courses/:id`, `POST /api/courses/:id/items`, `POST /api/courses/:id/enroll`, `POST /api/courses/:id/items/:itemId/complete`, `GET /api/courses/:id/report?format=csv`, `GET/POST /api/videos/:id/reactions`, `GET /api/videos/:id/reactions/report`, `GET /api/videos/:id/heatmap`, `GET/POST /api/videos/:id/audio-tracks`, `GET /api/videos/:id/moment?q=`, `GET /api/learning/overview?groupId=&format=csv`, `POST /api/assignments` с `courseId`.
 
 Полезные вызовы 1.5: `GET/POST/DELETE /api/live/:id/registration`, `POST /api/live/:id/attendance`, `GET /api/live/:id/attendees?format=csv`, `GET /api/live/:id/registration-link`, `POST /api/search/ask`, `POST /api/playback`, `GET /api/admin/quality?days=30&format=csv`.
+
+Полезные вызовы 1.6: `GET /api/videos/:id/premiere`, `POST /api/videos/:id/premiere/chat`, `POST /api/videos/:id/party`, `GET/POST /api/party/:code`, `POST /api/party/:code/state|chat|ping|invite|end`, `GET /api/live/:id/captions`, `GET /api/screens/:token/playlist`, `GET/POST/PATCH/DELETE /api/admin/screens`, `GET /sitemap-video.xml`.
 
 Полезные вызовы 1.3: `GET /api/videos/:id/editor`, `POST /api/videos/:id/editor/trim|cut|silence`, `POST /api/videos/:id/clips`, `POST /api/videos/:id/subtitles/:sid/translate`, `POST /api/videos/:id/ocr`, `GET /api/videos/:id/screen-text?q=`, `GET /api/videos/:id/chat-replay`, `GET /api/videos/:id/scorm.zip?version=1.2&percent=90&share=1`, `GET /api/rss/latest?ft=…&audio=1`, `GET/POST /api/admin/webhooks`, `POST /api/admin/webhooks/:id/test`, `GET /api/admin/xapi/statements`, `POST /api/admin/system/watch-scan`.
 

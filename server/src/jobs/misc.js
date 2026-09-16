@@ -6,7 +6,8 @@ import { sendMailNow } from '../lib/mailer.js';
 import { storage, ensureDir, exists, removeDir } from '../lib/storage.js';
 import { loadSettings } from '../lib/settings.js';
 import { enqueue } from '../lib/jobs.js';
-import { notifySubscribersNewVideo, notify } from '../lib/notify.js';
+import { notifySubscribersNewVideo, notifyPremiereAudience, notify } from '../lib/notify.js';
+import { captionsToVtt } from './captions.js';
 import { shortId } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { sendReminders } from '../lib/assignments.js';
@@ -49,6 +50,20 @@ export async function runLiveImport(job, ctx) {
       s['upload.premoderation'] ? 'pending' : 'approved', path.basename(src), st2.size, storage.rel(dest), stream.id, s['comments.default_mode'], stream.started_at || null],
   );
   await query('UPDATE live_streams SET recording_video_id = $2 WHERE id = $1', [stream.id, videoId]);
+  // Живые субтитры эфира сразу становятся субтитрами записи — расшифровку не нужно ждать (1.6)
+  try {
+    const caps = await many('SELECT seq, offset_sec, text FROM live_captions WHERE stream_id = $1 ORDER BY seq', [stream.id]);
+    if (caps.length) {
+      const vtt = captionsToVtt(caps);
+      const subDir = storage.videoDir(videoId);
+      await ensureDir(subDir);
+      const subPath = path.join(subDir, 'subs_live_ru.vtt');
+      await fsp.writeFile(subPath, vtt, 'utf8');
+      await query(
+        `INSERT INTO subtitles(video_id, lang, label, path, source, is_default) VALUES ($1,'ru','Русские (эфир)',$2,'asr',true)`,
+        [videoId, storage.rel(subPath)]);
+    }
+  } catch (e) { ctx?.log?.warn({ err: e.message }, 'live captions → subtitles'); }
   await enqueue('transcode', { videoId }, { videoId, priority: 1 });
   await notify(stream.owner_id, { type: 'live_recording', title: 'Запись эфира сохранена', body: title, link: `/studio/videos/${videoId}`, data: { videoId } });
   return { videoId };
@@ -82,6 +97,28 @@ async function maintenanceBody(job, ctx) {
     await emitEvent('video.published', { video: eventVideo(v) });
   }
   out.published = due.length;
+  // 1a. Премьеры: за 30 минут зовём подписчиков, в назначенный час начинаем показ (как на YouTube)
+  try {
+    const soon = await many(
+      `UPDATE videos SET premiere_notified_at = now()
+       WHERE premiere = true AND premiere_notified_at IS NULL AND status = 'ready' AND deleted_at IS NULL
+         AND scheduled_at > now() AND scheduled_at <= now() + interval '30 minutes' RETURNING *`);
+    for (const v of soon) {
+      const owner = await one('SELECT id, display_name FROM users WHERE id = $1', [v.owner_id]);
+      await notifyPremiereAudience(v, owner, 'soon');
+    }
+    const started = await many(
+      `UPDATE videos SET premiere_started_at = now(), published_at = COALESCE(published_at, scheduled_at)
+       WHERE premiere = true AND premiere_started_at IS NULL AND status = 'ready' AND deleted_at IS NULL
+         AND scheduled_at <= now() RETURNING *`);
+    for (const v of started) {
+      const owner = await one('SELECT id, display_name FROM users WHERE id = $1', [v.owner_id]);
+      await publish({ type: 'video.published', videoId: v.id, ownerId: v.owner_id });
+      await notifyPremiereAudience(v, owner, 'start');
+      await emitEvent('video.published', { video: eventVideo(v) });
+    }
+    out.premieres = { soon: soon.length, started: started.length };
+  } catch (e) { ctx?.log?.warn({ err: e.message }, 'premieres'); }
   // 1b. Напоминания о запланированных эфирах (за 15 минут)
   try { out.liveReminders = await sendLiveReminders(); } catch (e) { ctx?.log?.warn({ err: e.message }, 'live reminders'); }
   // 1c. Срок публикации: видео с истёкшим сроком становятся приватными
@@ -130,6 +167,11 @@ async function maintenanceBody(job, ctx) {
     // Сеансы воспроизведения (качество) и журнал вопросов к видеотеке
     await query(`DELETE FROM playback_sessions WHERE created_at < now() - ($1 || ' days')::interval`, [String(s['qoe.retention_days'] || 90)]);
     await query(`DELETE FROM ai_search_log WHERE created_at < now() - interval '180 days'`);
+    // 1.6: реплики живых субтитров и закрытые комнаты совместного просмотра
+    await query(`DELETE FROM live_captions WHERE created_at < now() - ($1 || ' days')::interval`, [String(s['retention.history_days'] || 365)]);
+    await query(`UPDATE watch_parties SET ended_at = now(), playing = false WHERE ended_at IS NULL AND updated_at < now() - interval '12 hours'`);
+    await query(`DELETE FROM watch_parties WHERE ended_at IS NOT NULL AND ended_at < now() - interval '30 days'`);
+    await query(`DELETE FROM room_messages WHERE room LIKE 'party:%' AND created_at < now() - interval '30 days'`);
     await query(`DELETE FROM search_history WHERE created_at < now() - interval '180 days'`);
     // Корзина: окончательно удаляем видео, стёртые давнее retention.trash_days (файлы и записи)
     const trashDays = Math.max(1, Number(s['retention.trash_days']) || 30);

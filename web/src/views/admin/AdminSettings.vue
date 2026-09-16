@@ -430,6 +430,18 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             </div>
             <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('search.'), ...prefix('qoe.'), ...prefix('webinar.')])">Сохранить</button></div>
           </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="accounts" :size="20" style="vertical-align:-4px" /> Премьеры, совместный просмотр и экраны</h3>
+            <p class="small muted">Премьера — показ загруженного видео в назначенный час с обратным отсчётом и чатом (как на YouTube и VK Видео). «Смотрим вместе» — комната с общей паузой и перемоткой. Экраны — витрина для телевизора в холле: раздел «Администрирование → Экраны».</p>
+            <label class="switch"><input type="checkbox" v-model="s['premiere.enabled']" /><span class="track"></span><span>Премьеры видео</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['premiere.chat_default']" /><span class="track"></span><span>Чат премьеры включён по умолчанию</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['party.enabled']" /><span class="track"></span><span>Совместный просмотр («Смотрим вместе»)</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['party.everyone_controls']" /><span class="track"></span><span>Управлять просмотром может любой участник комнаты</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['screens.enabled']" /><span class="track"></span><span>Экраны-витрины</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['live.captions']" /><span class="track"></span><span>Живые субтитры эфира (нужен сервер распознавания речи)</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['notify.video_watched']" /><span class="track"></span><span>Сообщать автору, что его личное видео посмотрели</span></label>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['seo.video']" /><span class="track"></span><span>Разметка и карта сайта для публичных видео (видео-SEO)</span></label>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('premiere.'), ...prefix('party.'), ...prefix('screens.'), ...prefix('seo.'), 'live.captions', 'notify.video_watched'])">Сохранить</button></div>
+          </div>
           <div class="panel"><h3 class="mb-8"><Icon name="tune" :size="20" style="vertical-align:-4px" /> Плеер и доступность</h3>
             <p class="small muted">Кнопка «Пропустить вступление» появляется, если у видео заданы границы заставки (студия → «Сведения»). Размер субтитров и подложку зритель настраивает сам в меню плеера.</p>
             <label class="switch"><input type="checkbox" v-model="s['player.skip_intro']" /><span class="track"></span><span>Кнопка «Пропустить вступление»</span></label>

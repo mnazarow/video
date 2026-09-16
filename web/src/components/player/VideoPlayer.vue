@@ -35,6 +35,8 @@ const props = defineProps({
   introEnd: { type: Number, default: 0 },
   outroStart: { type: Number, default: 0 },
   logo: { type: String, default: '' },
+  // 1.6 — живые субтитры эфира (распознавание речи по ходу трансляции)
+  captionLines: { type: Array, default: () => [] },   // [{seq,text}] — последние реплики
   // 1.5 — метрики качества воспроизведения
   qoeVideoId: { type: String, default: '' },
   qoeStreamId: { type: String, default: '' },
@@ -513,6 +515,9 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
       <img v-if="logo" class="player-logo" :src="logo" alt="" aria-hidden="true" />
       <button v-if="showSkipIntro" class="skip-btn" @click.stop="skipIntro">Пропустить вступление <Icon name="next" :size="16" /></button>
       <button v-else-if="showSkipOutro" class="skip-btn" @click.stop="skipOutro">{{ hasNext ? 'Следующее видео' : 'В конец' }} <Icon name="next" :size="16" /></button>
+      <div v-if="captionLines.length" class="live-captions" :class="{ up: state.controlsVisible }">
+        <span v-for="l in captionLines.slice(-2)" :key="l.seq">{{ l.text }}</span>
+      </div>
       <slot name="overlay" />
     </div>
 
@@ -616,6 +621,9 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
 .player.fullscreen { border-radius: 0; aspect-ratio: auto; width: 100vw; height: 100vh; }
 .player-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .player-video::cue { background: var(--cue-bg, rgba(0,0,0,0.75)); color: #fff; font-family: var(--font-body); font-size: var(--cue-size, 1.05em); line-height: 1.35; }
+.live-captions { position: absolute; left: 50%; transform: translateX(-50%); bottom: 64px; max-width: min(90%, 900px); display: flex; flex-direction: column; gap: 4px; text-align: center; pointer-events: none; transition: bottom var(--t); }
+.live-captions.up { bottom: 96px; }
+.live-captions span { background: rgba(0,0,0,.78); color: #fff; padding: 4px 12px; border-radius: 6px; font-size: clamp(14px, 1.6vw, 20px); line-height: 1.35; display: inline-block; }
 .player-logo { position: absolute; top: 12px; right: 12px; height: 26px; opacity: .75; pointer-events: none; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
 .skip-btn { position: absolute; right: 16px; bottom: 76px; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px;
   background: rgba(0,0,0,0.75); color: #fff; border: 1px solid rgba(255,255,255,0.35); cursor: pointer; font-size: 14px; }

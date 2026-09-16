@@ -47,6 +47,15 @@ export const DEFAULTS = {
   'qoe.enabled': true,                  // сбор метрик качества воспроизведения
   'qoe.retention_days': 90,             // сколько хранить сеансы воспроизведения
   'webinar.attendance_min_percent': 50, // с какой доли эфира считать участие засчитанным
+  // 1.6 — премьеры, совместный просмотр, живые субтитры, экраны, видео-SEO
+  'premiere.enabled': true,             // премьеры видео (показ по расписанию с чатом)
+  'premiere.chat_default': true,        // чат премьеры включён по умолчанию
+  'party.enabled': true,                // совместный просмотр («Смотрим вместе»)
+  'party.everyone_controls': true,      // по умолчанию управлять просмотром может любой участник
+  'live.captions': false,               // живые субтитры эфира (нужен сервер распознавания речи)
+  'screens.enabled': true,              // экраны-витрины для телевизоров
+  'seo.video': true,                    // разметка schema.org и карта сайта для публичных видео
+  'notify.video_watched': true,         // уведомлять автора о просмотре личной записи
   // Загрузка и обработка
   'upload.max_size_mb': 8192,
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
@@ -356,6 +365,11 @@ export async function publicSettings() {
     // 1.5
     askEnabled: s['search.ask_enabled'] && s['ai.enabled'],
     qoeEnabled: s['qoe.enabled'],
+    premiereEnabled: s['premiere.enabled'],
+    partyEnabled: s['party.enabled'],
+    liveCaptions: s['live.captions'] && s['asr.enabled'],
+    screensEnabled: s['screens.enabled'],
+    videoSeo: s['seo.video'],
   };
 }
 

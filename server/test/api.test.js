@@ -1448,6 +1448,168 @@ test('границы доступа после аудита: токены, се�
   assert.equal(trav.status, 404, 'обход каталога закрыт');
 });
 
+test('премьера: анонс, чат, доступ к медиа и переход в обычное видео', async () => {
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) > 3);
+  assert.ok(v, 'нужно готовое видео');
+
+  // Премьера возможна только на будущее время
+  const past = await admin.patch(`/api/videos/${v.id}`, { premiere: true, scheduledAt: new Date(Date.now() - 60000).toISOString() });
+  assert.equal(past.status, 400, 'премьера в прошлом отклонена');
+
+  const at = new Date(Date.now() + 3600 * 1000).toISOString();
+  const set = await admin.patch(`/api/videos/${v.id}`, { premiere: true, premiereChat: true, scheduledAt: at, visibility: 'internal' });
+  assert.equal(set.status, 200, set.text);
+  assert.equal(set.json.video.premiere, true);
+  assert.equal(set.json.video.premiereState, 'scheduled');
+
+  // Анонс виден сотруднику, обратный отсчёт считается
+  const pr = await user.get(`/api/videos/${v.shortId}/premiere`);
+  assert.equal(pr.status, 200, pr.text);
+  assert.equal(pr.json.state, 'scheduled');
+  assert.ok(pr.json.startsInSec > 3000, 'до премьеры больше 50 минут');
+  assert.equal(pr.json.position, 0);
+
+  // Видео есть в поиске и лентах как анонс
+  const card = await user.get(`/api/videos/${v.shortId}`);
+  assert.equal(card.status, 200, 'страница анонса открывается');
+  assert.equal(card.json.video.premiereState, 'scheduled');
+
+  // Медиа до начала не отдаётся постороннему, автору — отдаётся
+  const mediaUser = await user.req('GET', '/api/media/auth', null, { headers: { 'x-original-uri': `/media/videos/${v.id}/hls/master.m3u8` } });
+  assert.equal(mediaUser.status, 403, 'зритель не может скачать видео до премьеры');
+  const mediaOwner = await admin.req('GET', '/api/media/auth', null, { headers: { 'x-original-uri': `/media/videos/${v.id}/hls/master.m3u8` } });
+  assert.equal(mediaOwner.status, 200, 'автор смотрит до премьеры');
+
+  // Чат премьеры
+  const msg = await user.post(`/api/videos/${v.shortId}/premiere/chat`, { body: 'Ждём!' });
+  assert.equal(msg.status, 200, msg.text);
+  assert.equal(msg.json.message.body, 'Ждём!');
+  const empty = await user.post(`/api/videos/${v.shortId}/premiere/chat`, { body: '   ' });
+  assert.equal(empty.status, 400, 'пустое сообщение отклонено');
+  const again = await user.get(`/api/videos/${v.shortId}/premiere`);
+  assert.ok(again.json.messages.length >= 1, 'история чата отдаётся');
+
+  // Комнату совместного просмотра на не начавшейся премьере создать нельзя
+  const party = await user.post(`/api/videos/${v.id}/party`, {});
+  assert.equal(party.status, 400, 'комната до премьеры запрещена');
+
+  // Премьера началась: позиция считается от назначенного времени
+  await admin.patch(`/api/videos/${v.id}`, { premiere: false, scheduledAt: null });
+  const back = await user.get(`/api/videos/${v.shortId}`);
+  assert.equal(back.json.video.premiere, false, 'видео вернулось в обычный режим');
+});
+
+test('совместный просмотр: комната, синхронизация, чат и права', async () => {
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) > 3);
+  const created = await admin.post(`/api/videos/${v.id}/party`, { everyoneControls: false });
+  assert.equal(created.status, 200, created.text);
+  const code = created.json.party.code;
+  assert.ok(code && code.length >= 6, 'есть код комнаты');
+  assert.ok(created.json.url.includes(`/party/${code}`), 'ссылка для рассылки');
+
+  // Повторный вызов возвращает ту же комнату (ведущий не плодит комнаты)
+  const again = await admin.post(`/api/videos/${v.id}/party`, {});
+  assert.equal(again.json.party.code, code, 'комната переиспользуется');
+
+  // Ведущий управляет, участник — нет (позиция не может быть дальше конца видео)
+  const pos = Math.max(1, Math.min(20, Number(v.duration) / 2));
+  const play = await admin.post(`/api/party/${code}/state`, { position: pos, playing: true });
+  assert.equal(play.status, 200, play.text);
+  assert.ok(Math.abs(play.json.party.position - pos) < 1, 'позиция принята');
+  const byUser = await user.post(`/api/party/${code}/state`, { position: 0, playing: false });
+  assert.equal(byUser.status, 403, 'участник не управляет, когда это запрещено');
+
+  // Позиция «едет» вместе с эфиром комнаты
+  await new Promise((r) => setTimeout(r, 1200));
+  const state = await user.get(`/api/party/${code}`);
+  assert.equal(state.status, 200, state.text);
+  assert.ok(state.json.party.position > pos + 0.5, 'позиция догоняет реальное время');
+  assert.ok(state.json.party.members.length >= 1, 'участники видны');
+
+  // Чат комнаты и приглашение
+  const msg = await user.post(`/api/party/${code}/chat`, { body: 'Привет' });
+  assert.equal(msg.status, 200, msg.text);
+  const inv = await admin.post(`/api/party/${code}/invite`, { userIds: [] });
+  assert.equal(inv.status, 400, 'пустое приглашение отклонено');
+
+  // Гость без входа в комнату не попадает
+  const anon = await guest.get(`/api/party/${code}`);
+  assert.equal(anon.status, 401, 'гостю комната недоступна');
+
+  // Закрывает ведущий
+  const byOther = await user.post(`/api/party/${code}/end`, {});
+  assert.equal(byOther.status, 403, 'участник не закрывает комнату');
+  const closed = await admin.post(`/api/party/${code}/end`, {});
+  assert.equal(closed.status, 200, closed.text);
+  const after = await admin.post(`/api/party/${code}/state`, { position: 5, playing: true });
+  assert.equal(after.status, 400, 'в закрытой комнате состояние не меняется');
+});
+
+test('экраны-витрины: токен, содержимое, ротация и права', async () => {
+  const created = await admin.post('/api/admin/screens', { name: 'Тестовый холл', source: 'latest', subtitles: true });
+  assert.equal(created.status, 200, created.text);
+  const sc = created.json.screen;
+  assert.ok(sc.token && sc.url.includes(`/screen/${sc.token}`), 'есть ссылка экрана');
+
+  // Плейлист отдаётся без входа — телевизору незачем логиниться
+  const pl = await guest.get(`/api/screens/${sc.token}/playlist`);
+  assert.equal(pl.status, 200, pl.text);
+  assert.ok(pl.json.items.length > 0, 'в показе есть видео');
+  assert.ok(pl.json.items.every((x) => ['public', 'internal'].includes(x.visibility)), 'личные видео на экран не попадают');
+  assert.ok(pl.json.items.every((x) => x.hlsUrl || x.mp4Url), 'у каждого видео есть поток');
+
+  // Сотрудник без прав не управляет экранами
+  const byUser = await user.get('/api/admin/screens');
+  assert.equal(byUser.status, 403, 'раздел только для модераторов');
+
+  // Смена ссылки отключает старую
+  const rot = await admin.patch(`/api/admin/screens/${sc.id}`, { rotateToken: true, shuffle: true });
+  assert.equal(rot.status, 200, rot.text);
+  assert.notEqual(rot.json.screen.token, sc.token, 'токен сменился');
+  const old = await guest.get(`/api/screens/${sc.token}/playlist`);
+  assert.equal(old.status, 404, 'старая ссылка больше не работает');
+
+  // Выключенный экран ничего не показывает
+  await admin.patch(`/api/admin/screens/${sc.id}`, { isActive: false });
+  const off = await guest.get(`/api/screens/${rot.json.screen.token}/playlist`);
+  assert.equal(off.status, 403, 'выключенный экран не отдаёт видео');
+
+  const prev = await admin.get(`/api/admin/screens/${sc.id}/preview`);
+  assert.equal(prev.status, 200, prev.text);
+  assert.ok(prev.json.count >= 0);
+  const delr = await admin.del(`/api/admin/screens/${sc.id}`);
+  assert.equal(delr.status, 204);
+});
+
+test('живые субтитры эфира и видео-SEO', async () => {
+  const streams = await admin.get('/api/studio/live');
+  const st = (streams.json.streams || [])[0];
+  assert.ok(st, 'нужна трансляция');
+  const on = await admin.patch(`/api/studio/live/${st.id}`, { captions: true });
+  assert.equal(on.status, 200, on.text);
+  assert.equal(on.json.stream.captions, true, 'субтитры включены');
+  const caps = await user.get(`/api/live/${st.id}/captions`);
+  assert.equal(caps.status, 200, caps.text);
+  assert.ok(Array.isArray(caps.json.captions));
+  await admin.patch(`/api/studio/live/${st.id}`, { captions: false });
+
+  // Разметка schema.org и карта сайта для публичных видео
+  const pub = (await admin.get('/api/studio/videos?limit=20')).json.videos.find((x) => x.status === 'ready' && x.visibility === 'public');
+  if (pub) {
+    const page = await guest.get(`/watch/${pub.shortId}`);
+    assert.ok(page.text.includes('application/ld+json'), 'на странице есть разметка VideoObject');
+    assert.ok(page.text.includes('"@type":"VideoObject"'), 'тип разметки — VideoObject');
+  }
+  const sitemap = await guest.get('/sitemap-video.xml');
+  assert.equal(sitemap.status, 200, 'карта сайта отдаётся');
+  assert.ok(sitemap.text.startsWith('<?xml'), 'это XML');
+  const robots = await guest.get('/robots.txt');
+  assert.ok(robots.text.includes('Sitemap: '), 'robots.txt указывает на карту сайта');
+  assert.ok(robots.text.includes('Disallow: /admin'), 'админка закрыта от роботов');
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);

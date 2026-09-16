@@ -54,6 +54,30 @@ export async function notifyAdmins(payload, { moderators = false, email = null }
   return admins.length;
 }
 
+/** Позвать на премьеру: за 30 минут и в момент начала показа (как уведомления YouTube). */
+export async function notifyPremiereAudience(video, owner, kind = 'soon') {
+  const subs = await many(
+    `SELECT u.id, u.email, u.display_name, u.prefs FROM subscriptions s JOIN users u ON u.id = s.subscriber_id
+     WHERE s.channel_id = $1 AND s.notify IN ('all','highlights') AND u.status = 'active' AND u.deleted_at IS NULL`,
+    [owner.id],
+  );
+  const link = `/watch/${video.short_id}`;
+  const image = video.thumbnail_path ? `/media/${video.thumbnail_path}` : null;
+  const when = video.scheduled_at ? new Date(video.scheduled_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '';
+  let n = 0;
+  for (const u of subs) {
+    const prefs = notifPrefs(u);
+    if (!prefs.newVideos) continue;
+    await notify(u.id, {
+      type: kind === 'start' ? 'premiere_started' : 'premiere_soon',
+      title: kind === 'start' ? `Премьера началась: ${owner.display_name}` : `Скоро премьера в ${when}`,
+      body: video.title, link, image, actorId: owner.id, data: { videoId: video.id, premiere: true },
+    });
+    n += 1;
+  }
+  return n;
+}
+
 /** Уведомить подписчиков канала о новом видео. */
 export async function notifySubscribersNewVideo(video, owner) {
   const subs = await many(

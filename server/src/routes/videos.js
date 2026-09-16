@@ -180,6 +180,21 @@ export default async function videoRoutes(app) {
              devices = video_stats_daily.devices || jsonb_build_object($3::text, coalesce((video_stats_daily.devices->>$3)::int, 0) + 1)`,
           [v.id, source, device],
         );
+        // «Ваше видео посмотрели» (как в Loom): автор узнаёт о первом просмотре личной записи
+        try {
+          if (req.user && req.user.id !== v.owner_id && ['private', 'unlisted'].includes(v.visibility) && req.settings['notify.video_watched']) {
+            const seenBefore = await one('SELECT 1 FROM video_views WHERE video_id = $1 AND user_id = $2 AND counted = true AND id <> $3 LIMIT 1', [v.id, req.user.id, row.id]);
+            if (!seenBefore) {
+              await notify(v.owner_id, {
+                type: 'video_watched', actorId: req.user.id,
+                title: `${req.user.display_name} посмотрел ваше видео`,
+                body: v.title, link: `/watch/${v.short_id}`,
+                image: v.thumbnail_path ? `/media/${v.thumbnail_path}` : null,
+                data: { videoId: v.id },
+              });
+            }
+          }
+        } catch { /* уведомление не должно мешать просмотру */ }
       }
     }
     if (delta > 0) {
@@ -250,7 +265,17 @@ export default async function videoRoutes(app) {
       if (d && Number.isNaN(d.getTime())) throw badRequest('Некорректная дата публикации');
       add('scheduled_at', d && d > new Date() ? d : null);
       if (d && d > new Date()) add('published_at', null);
+      if (!(d && d > new Date()) && b.premiere === undefined) add('premiere', false);
     }
+    // Премьера: тот же scheduled_at, но анонс виден заранее, а показ идёт синхронно у всех (1.6)
+    if (b.premiere !== undefined) {
+      const wants = !!b.premiere;
+      const when = b.scheduledAt !== undefined ? (b.scheduledAt ? new Date(b.scheduledAt) : null) : (v.scheduled_at ? new Date(v.scheduled_at) : null);
+      if (wants && !(when && when > new Date())) throw badRequest('Премьера возможна только на будущее время — укажите дату и время показа');
+      if (wants && Number(v.duration) <= 0) throw badRequest('Премьеру можно назначить, когда видео обработано');
+      add('premiere', wants);
+    }
+    if (b.premiereChat !== undefined) add('premiere_chat', !!b.premiereChat);
     if (b.chapters !== undefined) {
       let ch = [];
       if (Array.isArray(b.chapters)) ch = b.chapters.map((c) => ({ start: Math.max(0, Number(c.start) || 0), title: String(c.title || '').trim().slice(0, 100) })).filter((c) => c.title).sort((a, c) => a.start - c.start).slice(0, 200);

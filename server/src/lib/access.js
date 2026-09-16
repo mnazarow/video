@@ -15,7 +15,8 @@ export async function canViewVideo(video, user, shareTokens = null) {
   if (owner || isStaff(user)) return true;
   if (video.is_blocked) return false;
   if (video.moderation_status !== 'approved') return false;
-  if (video.scheduled_at && new Date(video.scheduled_at) > new Date()) return false;
+  // Премьера — анонс: страница видна заранее (обратный отсчёт и чат), само видео открывается в назначенный час
+  if (video.scheduled_at && new Date(video.scheduled_at) > new Date() && !video.premiere) return false;
   switch (video.visibility) {
     case 'public':
     case 'unlisted':
@@ -31,6 +32,28 @@ export async function canViewVideo(video, user, shareTokens = null) {
     default:
       return false;
   }
+}
+
+/** Не начавшаяся премьера: страницу показываем, воспроизведение — нет. */
+export function premierePending(video) {
+  return !!(video && video.premiere && video.scheduled_at && new Date(video.scheduled_at) > new Date());
+}
+
+/** Состояние премьеры: scheduled — ждём, live — идёт показ, done — уже обычное видео. */
+export function premiereState(video) {
+  if (!video || !video.premiere || !video.scheduled_at) return null;
+  const at = new Date(video.scheduled_at).getTime();
+  const now = Date.now();
+  if (now < at) return 'scheduled';
+  if (now < at + (Number(video.duration) || 0) * 1000 + 15000) return 'live';
+  return 'done';
+}
+
+/** Можно ли именно смотреть (а не только видеть карточку): премьера до начала не проигрывается. */
+export async function canPlayVideo(video, user, shareTokens = null) {
+  if (!(await canViewVideo(video, user, shareTokens))) return false;
+  if (premierePending(video) && !(user && (user.id === video.owner_id || isStaff(user)))) return false;
+  return true;
 }
 
 /** Персональный доступ, доступ через группу или через назначение «к просмотру». */
@@ -97,7 +120,7 @@ export function canViewLive(stream, user) {
 /** SQL-условие «видео видимо этому пользователю в списках» (без unlisted/private). */
 export function listVisibilitySql(user, alias = 'v') {
   // ВАЖНО: результат оборачивается в скобки — иначе OR в соседнем условии (например `hd`) снимает фильтр видимости
-  const base = `${alias}.deleted_at IS NULL AND ${alias}.status = 'ready' AND ${alias}.is_blocked = false AND ${alias}.moderation_status = 'approved' AND (${alias}.scheduled_at IS NULL OR ${alias}.scheduled_at <= now())`;
+  const base = `${alias}.deleted_at IS NULL AND ${alias}.status = 'ready' AND ${alias}.is_blocked = false AND ${alias}.moderation_status = 'approved' AND (${alias}.scheduled_at IS NULL OR ${alias}.scheduled_at <= now() OR ${alias}.premiere)`;
   const vis = isActive(user) || isStaff(user) ? `${alias}.visibility IN ('public','internal')` : `${alias}.visibility = 'public'`;
   return `(${base} AND ${vis})`;
 }

@@ -15,6 +15,7 @@ import { storage, ensureDir } from '../lib/storage.js';
 import { runFfmpeg } from '../lib/ffmpeg.js';
 import { audit } from '../lib/audit.js';
 import { emitEvent } from '../lib/events.js';
+import { loadSettings } from '../lib/settings.js';
 
 const LIVE_SELECT = `s.*, u.display_name AS owner_name, u.handle AS owner_handle, u.avatar_path AS owner_avatar, u.subscriber_count AS owner_subscribers, rv.short_id AS recording_short_id`;
 const LIVE_FROM = `live_streams s JOIN users u ON u.id = s.owner_id LEFT JOIN videos rv ON rv.id = s.recording_video_id`;
@@ -198,6 +199,17 @@ export default async function liveRoutes(app) {
     if (b.registration !== undefined) add('registration', !!b.registration);
     if (b.registrationLimit !== undefined) add('registration_limit', b.registrationLimit ? Math.max(1, Math.min(100000, Number(b.registrationLimit))) : null);
     if (b.registrationNote !== undefined) add('registration_note', String(b.registrationNote).slice(0, 1000));
+    // Живые субтитры эфира (1.6)
+    if (b.captions !== undefined) {
+      add('captions', !!b.captions);
+      // Включили посреди эфира — сразу запускаем распознавание
+      if (b.captions && s.status === 'live') {
+        try {
+          const st = await loadSettings();
+          if (st['asr.enabled'] && st['live.captions']) await enqueue('live_captions', { streamId: s.id }, { dedupe: true, maxAttempts: 2 });
+        } catch { /* ignore */ }
+      }
+    }
     if (b.status === 'idle' && s.status === 'ended') { add('status', 'idle'); add('started_at', null); add('ended_at', null); add('recording_video_id', null); }
     if (sets.length) { sets.push('updated_at = now()'); await query(`UPDATE live_streams SET ${sets.join(', ')} WHERE id = $1`, params); }
     const full = await loadStream(s.id);
@@ -268,6 +280,13 @@ async function startStream(s, pathInfo) {
   const protocol = pathInfo?.source?.type ? String(pathInfo.source.type).replace(/Conn|Session/g, '').toLowerCase() : null;
   await query(`UPDATE live_streams SET status = 'live', started_at = now(), ended_at = NULL, source_protocol = $2, viewer_count = 0, updated_at = now() WHERE id = $1`, [s.id, protocol]);
   const full = await loadStream(s.id);
+  // Живые субтитры: отдельное задание снимает звук порциями и распознаёт его, пока идёт эфир
+  if (s.captions) {
+    try {
+      const st = await loadSettings();
+      if (st['asr.enabled'] && st['live.captions']) await enqueue('live_captions', { streamId: s.id }, { dedupe: true, maxAttempts: 2 });
+    } catch { /* субтитры не должны мешать эфиру */ }
+  }
   await publish({ type: 'live.started', streamId: s.id, shortId: s.short_id, ownerId: s.owner_id, visibility: s.visibility });
   await emitEvent('live.started', { stream: { id: s.id, shortId: s.short_id, title: s.title, ownerId: s.owner_id, visibility: s.visibility, protocol, url: `/live/${s.short_id}` } });
   await toChannel(`live:${s.id}`, { type: 'stream_status', streamId: s.id, status: 'live', stream: liveOut(full) });

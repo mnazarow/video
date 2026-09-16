@@ -1,8 +1,8 @@
 // WebSocket: уведомления, прогресс обработки, чат трансляций, служебные события для админки.
-import { bus } from '../db.js';
+import { bus, one } from '../db.js';
 import { addSocket, joinChannel, leaveChannel, localToUser, localToChannel, localBroadcast } from '../lib/realtime.js';
 import { loadStream } from './live.js';
-import { canViewLive } from '../lib/access.js';
+import { canViewLive, canViewVideo } from '../lib/access.js';
 
 let wired = false;
 function wireBus() {
@@ -43,6 +43,26 @@ export default async function wsRoutes(app) {
           if (!s || !canViewLive(s, req.user)) return;
           joinChannel(socket, `live:${s.id}`);
           socket.send(JSON.stringify({ type: 'joined', channel: `live:${s.id}` }));
+          return;
+        }
+        // Премьера видео: чат и события показа (1.6)
+        if (ch.startsWith('premiere:')) {
+          const v = await one(
+            'SELECT * FROM videos WHERE (id::text = $1 OR short_id = $1) AND deleted_at IS NULL', [ch.slice(9)]).catch(() => null);
+          if (!v || !v.premiere || !(await canViewVideo(v, req.user))) return;
+          joinChannel(socket, `premiere:${v.id}`);
+          socket.send(JSON.stringify({ type: 'joined', channel: `premiere:${v.id}` }));
+          return;
+        }
+        // Комната совместного просмотра (1.6)
+        if (ch.startsWith('party:')) {
+          const p = await one('SELECT * FROM watch_parties WHERE id::text = $1 OR code = $1', [ch.slice(6)]).catch(() => null);
+          if (!p || !req.user) return;
+          const v = await one('SELECT * FROM videos WHERE id = $1 AND deleted_at IS NULL', [p.video_id]).catch(() => null);
+          if (!v || !(await canViewVideo(v, req.user))) return;
+          joinChannel(socket, `party:${p.id}`);
+          socket.send(JSON.stringify({ type: 'joined', channel: `party:${p.id}` }));
+          return;
         }
         return;
       }

@@ -1,6 +1,0 @@
-User-agent: *
-Disallow: /admin
-Disallow: /studio
-Disallow: /api/
-Disallow: /media/
-Allow: /

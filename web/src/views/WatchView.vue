@@ -21,9 +21,10 @@ import EmptyState from '../components/EmptyState.vue';
 import Modal from '../components/Modal.vue';
 import QuizOverlay from '../components/watch/QuizOverlay.vue';
 import NotesPanel from '../components/watch/NotesPanel.vue';
+import PremiereChat from '../components/watch/PremiereChat.vue';
 import ViewerWatermark from '../components/watch/ViewerWatermark.vue';
 import AssignDialog from '../components/AssignDialog.vue';
-import { fmtViews, fmtNumber, fmtDate, fmtSubs, fmtDuration, VISIBILITY } from '../utils/format.js';
+import { fmtViews, fmtNumber, fmtDate, fmtDateTime, fmtSubs, fmtDuration, VISIBILITY } from '../utils/format.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -101,6 +102,47 @@ const endScreen = ref(false);
 const countdown = ref(5);
 let countdownTimer = null;
 const startAt = ref(0);
+
+// --- Премьера: обратный отсчёт, синхронная позиция, чат (1.6) ------------------------------
+const premiere = ref(null);       // { state, at, startsInSec, position, chatEnabled }
+const premiereLeft = ref(0);      // секунд до начала
+let premiereTimer = null;
+const premiereWaiting = computed(() => premiere.value?.state === 'scheduled');
+const premiereLive = computed(() => premiere.value?.state === 'live');
+const premiereClock = computed(() => {
+  const s = Math.max(0, premiereLeft.value);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60), ss = Math.floor(s % 60);
+  if (d > 0) return `${d} д ${h} ч`;
+  return [h, m, ss].map((x) => String(x).padStart(2, '0')).join(':');
+});
+async function loadPremiere(seq = loadSeq) {
+  clearInterval(premiereTimer);
+  if (!video.value?.premiere) { premiere.value = null; return; }
+  try {
+    const r = await get(`/api/videos/${video.value.shortId}/premiere`);
+    if (!isCurrentLoad(seq)) return;
+    premiere.value = r.enabled ? r : null;
+    premiereLeft.value = r.startsInSec || 0;
+    if (r.state === 'live' && r.position > 0) startAt.value = r.position;
+    if (r.state === 'scheduled') {
+      premiereTimer = setInterval(() => {
+        premiereLeft.value -= 1;
+        if (premiereLeft.value <= 0) { clearInterval(premiereTimer); load(); }
+      }, 1000);
+    }
+  } catch { premiere.value = null; }
+}
+
+// --- Совместный просмотр (1.6) ----------------------------------------------------------------
+const partyBusy = ref(false);
+async function startParty() {
+  if (partyBusy.value) return;
+  partyBusy.value = true;
+  try {
+    const r = await post(`/api/videos/${video.value.id}/party`, { everyoneControls: true, position: player.value?.currentTime?.() || 0 });
+    router.push(`/party/${r.party.code}`);
+  } catch (e) { ui.toast(e.message, { type: 'error' }); } finally { partyBusy.value = false; }
+}
 const source = ref('direct');
 // --- 1.1: заметки, тест, водяной знак, назначение, фрагмент ------------------------------
 const notesOpen = ref(false);
@@ -251,7 +293,7 @@ async function load() {
     else startAt.value = Number.isFinite(t) && t > 0 ? t : (r.video.viewer?.position && r.video.viewer.position > 5 ? r.video.viewer.position : 0);
     source.value = detectSource();
     get(`/api/videos/${r.video.shortId}/related?limit=20`).then((x) => { if (isCurrentLoad(seq)) related.value = x.videos; }).catch(() => {});
-    loadAttachments(seq); loadClips(seq); loadEngage(seq); loadCourseCtx(seq);
+    loadAttachments(seq); loadClips(seq); loadEngage(seq); loadCourseCtx(seq); loadPremiere(seq);
     screenOpen.value = route.query.panel === 'screen' && !!r.video.hasScreenText;
     chatReplayOpen.value = route.query.panel === 'chat' && !!r.video.hasChatReplay;
     if (route.query.list) get(`/api/playlists/${route.query.list}?limit=200`).then((p) => { if (isCurrentLoad(seq)) playlist.value = p; }).catch(() => { if (isCurrentLoad(seq)) playlist.value = null; });
@@ -321,7 +363,7 @@ function downloadUrl(type) { return `/api/videos/${video.value.shortId}/download
 watch(() => route.params.id, () => { if (route.name === 'watch') { transcript.value = { open: false, loading: false, cues: [], query: '', trackId: null, active: -1, error: '' }; notesOpen.value = false; notesCount.value = 0; screenOpen.value = false; chatReplayOpen.value = false; audioOnly.value = false; load(); } });
 watch(() => route.query.list, () => { if (route.name === 'watch' && route.query.list && !playlist.value) load(); });
 onMounted(() => { load(); window.addEventListener('cv:seek', onSeekEvent); window.addEventListener('cv:navigate', onNavEvent); document.addEventListener('keydown', onKey); });
-onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptTimer); clearInterval(clipTimer); clearInterval(attentionTimer); window.removeEventListener('cv:seek', onSeekEvent); window.removeEventListener('cv:navigate', onNavEvent); document.removeEventListener('keydown', onKey); });
+onBeforeUnmount(() => { clearInterval(premiereTimer); clearInterval(countdownTimer); clearInterval(transcriptTimer); clearInterval(clipTimer); clearInterval(attentionTimer); window.removeEventListener('cv:seek', onSeekEvent); window.removeEventListener('cv:navigate', onNavEvent); document.removeEventListener('keydown', onKey); });
 </script>
 
 <template>
@@ -342,7 +384,18 @@ onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptT
             <span class="tiny muted nowrap" v-if="courseCtx.step">Шаг {{ courseCtx.step }} из {{ courseCtx.total }}</span>
             <router-link v-if="courseCtx.next" class="btn sm" :to="`/watch/${courseCtx.next.video.shortId}?course=${courseCtx.course.slug || courseCtx.course.id}`">Следующий шаг <Icon name="next" :size="16" /></router-link>
           </div>
-          <div v-if="video.status !== 'ready'" class="player processing-card">
+          <div v-if="premiereWaiting" class="player premiere-card">
+            <img v-if="video.thumbnailUrl" :src="video.thumbnailUrl" alt="" class="pr-poster" />
+            <div class="pr-inner">
+              <span class="badge brand"><Icon name="sparkles" :size="12" /> Премьера</span>
+              <div class="pr-clock">{{ premiereClock }}</div>
+              <div class="pr-when">Показ начнётся {{ fmtDateTime(premiere.at) }}</div>
+              <div class="small" style="opacity:.85; max-width: 420px; text-align:center">
+                Видео откроется у всех одновременно. Подпишитесь на канал — пришлём напоминание за 30 минут.
+              </div>
+            </div>
+          </div>
+          <div v-else-if="video.status !== 'ready'" class="player processing-card">
             <div class="col" style="align-items: center; text-align: center; padding: 24px">
               <div v-if="video.status === 'failed'" class="col" style="align-items:center"><Icon name="alertCircle" :size="40" /><h3 style="color:#fff">Не удалось обработать видео</h3><p class="small" style="opacity:.8">{{ video.processingError }}</p></div>
               <template v-else><div class="spin big"></div><h3 style="color:#fff; margin-top: 12px">Видео обрабатывается</h3><p class="small" style="opacity:.8">{{ video.processingProgress || 0 }}% — {{ ({ probe: 'анализ', hls: 'кодирование', thumbnails: 'миниатюры', storyboard: 'раскадровка', mp4: 'подготовка mp4' })[video.processingStage] || 'в очереди' }}</p></template>
@@ -385,7 +438,10 @@ onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptT
 
       <div class="watch-body">
         <div class="watch-main">
-          <h1 class="watch-title">{{ video.title }}</h1>
+          <h1 class="watch-title">
+            <span v-if="premiereWaiting || premiereLive" class="badge brand" style="vertical-align: middle; margin-right: 8px"><Icon name="sparkles" :size="12" /> Премьера</span>{{ video.title }}
+          </h1>
+          <PremiereChat v-if="premiere?.chatEnabled && (premiereWaiting || premiereLive)" :video="video" :compact="premiereLive" class="mb-16" />
           <div class="watch-row">
             <div class="row gap-16 watch-owner">
               <router-link :to="`/@${video.owner.handle}`"><ChannelAvatar :user="video.owner" size="lg" /></router-link>
@@ -403,6 +459,7 @@ onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptT
               </div>
               <button class="btn soft" @click="share = true"><Icon name="share" :size="20" /> Поделиться</button>
               <button v-if="auth.isActive" class="btn soft" @click="save = true"><Icon name="playlistAdd" :size="20" /> Сохранить</button>
+              <button v-if="auth.isActive && auth.config?.partyEnabled !== false && video.status === 'ready' && !premiereWaiting" class="btn soft hide-mobile" :disabled="partyBusy" @click="startParty"><Icon name="accounts" :size="20" /> Смотреть вместе</button>
               <button v-if="auth.isActive" class="btn soft hide-mobile" :class="{ active: notesOpen }" @click="notesOpen = !notesOpen"><Icon :name="notesCount ? 'noteFill' : 'note'" :size="20" /> Заметки<span v-if="notesCount" class="badge brand" style="margin-left:4px">{{ notesCount }}</span></button>
               <a v-if="video.allowDownload && auth.isActive && (video.originalAvailable || video.mp4Url)" class="btn soft hide-mobile" :href="downloadUrl(video.originalAvailable ? '' : 'mp4')"><Icon name="download" :size="20" /> Скачать</a>
               <Dropdown>
@@ -552,6 +609,14 @@ onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptT
 </template>
 
 <style>
+/* Премьера: обратный отсчёт поверх затемнённой обложки (1.6) */
+.premiere-card { position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; background: linear-gradient(135deg, var(--brand-700), var(--brand-400)); color: #fff; }
+.premiere-card .pr-poster { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .28; filter: blur(2px); }
+.premiere-card .pr-inner { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px; text-align: center; }
+.premiere-card .pr-clock { font-family: var(--font-head); font-size: clamp(34px, 7vw, 64px); line-height: 1; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+.premiere-card .pr-when { font-size: 15px; opacity: .92; }
+@media (max-width: 767px) { .premiere-card { aspect-ratio: auto; min-height: 56.25vw; } }
+
 .course-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
 .course-bar a { color: inherit; text-decoration: none; }
 .course-bar a:hover b { text-decoration: underline; }

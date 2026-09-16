@@ -11,7 +11,7 @@ import { config } from './config.js';
 import authPlugin from './plugins/auth.js';
 import { HttpError, escapeHtml } from './lib/util.js';
 import { publicSettings } from './lib/settings.js';
-import { one } from './db.js';
+import { one, many } from './db.js';
 import authRoutes from './routes/auth.js';
 import videoRoutes from './routes/videos.js';
 import uploadRoutes from './routes/uploads.js';
@@ -36,6 +36,8 @@ import engageRoutes from './routes/engage.js';
 import learningRoutes from './routes/learning.js';
 import webinarRoutes from './routes/webinar.js';
 import playbackRoutes from './routes/playback.js';
+import roomRoutes from './routes/rooms.js';
+import screenRoutes from './routes/screens.js';
 import quizRoutes from './routes/quiz.js';
 import noteRoutes from './routes/notes.js';
 import shareRoutes from './routes/share.js';
@@ -123,6 +125,8 @@ export async function buildApp({ logger = true } = {}) {
   await app.register(learningRoutes, { prefix: '/api' });
   await app.register(webinarRoutes, { prefix: '/api' });
   await app.register(playbackRoutes, { prefix: '/api' });
+  await app.register(roomRoutes, { prefix: '/api' });
+  await app.register(screenRoutes, { prefix: '/api' });
   await app.register(quizRoutes, { prefix: '/api' });
   await app.register(noteRoutes, { prefix: '/api' });
   await app.register(shareRoutes, { prefix: '/api' });
@@ -190,6 +194,23 @@ export async function buildApp({ logger = true } = {}) {
           title = `${v.title} — ${site}`; description = (v.description || '').slice(0, 200) || `${v.owner_name} · ${site}`; type = 'video.other';
           if (v.thumbnail_path) image = `${base}/media/${v.thumbnail_path}`;
           if (v.allow_embed) extra = `<meta property="og:video" content="${base}/embed/${v.short_id}"><meta property="og:video:type" content="text/html"><meta property="og:video:width" content="1280"><meta property="og:video:height" content="720"><link rel="alternate" type="application/json+oembed" href="${base}/api/oembed?url=${encodeURIComponent(base + '/watch/' + v.short_id)}">`;
+          // Разметка schema.org/VideoObject: внутренний поисковый робот и корпоративный портал
+          // показывают видео карточкой с обложкой и длительностью (видео-SEO в духе Wistia)
+          if (v.visibility === 'public' && s.videoSeo !== false) {
+            const ld = {
+              '@context': 'https://schema.org', '@type': 'VideoObject',
+              name: v.title, description: (v.description || '').slice(0, 500) || v.title,
+              thumbnailUrl: v.thumbnail_path ? `${base}/media/${v.thumbnail_path}` : `${base}/og-default.png`,
+              uploadDate: v.published_at ? new Date(v.published_at).toISOString() : new Date(v.created_at).toISOString(),
+              duration: `PT${Math.max(1, Math.round(Number(v.duration) || 0))}S`,
+              contentUrl: v.mp4_path ? `${base}/media/${v.mp4_path}` : undefined,
+              embedUrl: v.allow_embed ? `${base}/embed/${v.short_id}` : undefined,
+              publisher: { '@type': 'Organization', name: site },
+              author: { '@type': 'Person', name: v.owner_name },
+              interactionStatistic: { '@type': 'InteractionCounter', interactionType: { '@type': 'WatchAction' }, userInteractionCount: Number(v.view_count) || 0 },
+            };
+            extra += `<script type="application/ld+json">${JSON.stringify(ld).replace(/</g, '\\u003c')}</script>`;
+          }
         } else if (v) { title = `${v.title} — ${site}`; description = 'Видео доступно сотрудникам после входа'; }
       } else if ((m = req.url.match(/^\/@([A-Za-z0-9._-]+)/))) {
         const u = await one('SELECT * FROM users WHERE handle = $1 AND deleted_at IS NULL', [m[1]]);
@@ -235,6 +256,46 @@ export async function buildApp({ logger = true } = {}) {
         { name: 'Загрузить видео', url: '/studio/upload?src=pwa', icons: [{ src: '/icons/icon-192.png', sizes: '192x192' }] },
       ],
     };
+  });
+
+  // Карта сайта с видео и robots.txt: чтобы публичные ролики попадали в корпоративный поиск
+  app.get('/sitemap-video.xml', async (req, reply) => {
+    const st = await publicSettings();
+    if (st.videoSeo === false) { reply.code(404); return 'disabled'; }
+    const base = config.baseUrl;
+    const rows = await many(
+      `SELECT v.short_id, v.title, v.description, v.duration, v.thumbnail_path, v.published_at, v.view_count
+       FROM videos v WHERE v.visibility = 'public' AND v.status = 'ready' AND v.deleted_at IS NULL
+         AND v.is_blocked = false AND v.moderation_status = 'approved' AND v.premiere = false
+         AND (v.scheduled_at IS NULL OR v.scheduled_at <= now())
+       ORDER BY v.published_at DESC NULLS LAST LIMIT 1000`);
+    const xml = ['<?xml version="1.0" encoding="UTF-8"?>',
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">'];
+    for (const v of rows) {
+      const loc = `${base}/watch/${v.short_id}`;
+      xml.push('<url>', `<loc>${escapeHtml(loc)}</loc>`, '<video:video>',
+        `<video:thumbnail_loc>${escapeHtml(v.thumbnail_path ? `${base}/media/${v.thumbnail_path}` : `${base}/og-default.png`)}</video:thumbnail_loc>`,
+        `<video:title>${escapeHtml(v.title)}</video:title>`,
+        `<video:description>${escapeHtml((v.description || v.title).slice(0, 2000))}</video:description>`,
+        `<video:player_loc>${escapeHtml(`${base}/embed/${v.short_id}`)}</video:player_loc>`,
+        `<video:duration>${Math.max(1, Math.round(Number(v.duration) || 0))}</video:duration>`,
+        v.published_at ? `<video:publication_date>${new Date(v.published_at).toISOString()}</video:publication_date>` : '',
+        `<video:view_count>${Number(v.view_count) || 0}</video:view_count>`,
+        '</video:video>', '</url>');
+    }
+    xml.push('</urlset>');
+    reply.type('application/xml').header('Cache-Control', 'public, max-age=600');
+    return xml.join('');
+  });
+
+  // Если в собранном фронтенде остался статический robots.txt (например, после обновления
+  // только изменёнными файлами), маршрут не регистрируем: fastify-static уже отдаёт этот путь.
+  const hasStaticRobots = fs.existsSync(path.join(config.webDist, 'robots.txt'));
+  if (!hasStaticRobots) app.get('/robots.txt', async (req, reply) => {
+    const st = await publicSettings();
+    reply.type('text/plain').header('Cache-Control', 'public, max-age=3600');
+    if (st.videoSeo === false || st.openHome === false) return 'User-agent: *\nDisallow: /\n';
+    return `User-agent: *\nAllow: /$\nAllow: /watch/\nAllow: /@\nDisallow: /studio\nDisallow: /admin\nDisallow: /api/\nDisallow: /s/\nSitemap: ${config.baseUrl}/sitemap-video.xml\n`;
   });
 
   // oEmbed для публичных видео

@@ -32,6 +32,15 @@ async function toggleReminder() {
   try { const r = await post(`/api/live/${stream.value.shortId}/remind`, { on: !stream.value.reminder }); stream.value.reminder = r.reminder; stream.value.reminderCount = r.count; ui.toast(r.reminder ? 'Напомним за 15 минут до начала' : 'Напоминание отключено', { type: 'success' }); } catch (e) { ui.toast(e.message, { type: 'error' }); }
 }
 
+// 1.6: живые субтитры эфира
+const captions = ref([]);            // последние реплики
+const captionsOn = ref(true);        // зритель может выключить их у себя
+const captionLines = computed(() => (captionsOn.value ? captions.value.slice(-2) : []));
+async function loadCaptions() {
+  if (!stream.value?.captions) { captions.value = []; return; }
+  try { const r = await get(`/api/live/${stream.value.shortId}/captions?limit=10`); captions.value = r.captions || []; } catch { captions.value = []; }
+}
+
 // 1.5: регистрация на вебинар и учёт присутствия
 const reg = ref(null);
 const regBusy = ref(false);
@@ -68,6 +77,7 @@ async function load() {
     stream.value = (await get(`/api/live/${route.params.id}`)).stream;
     document.title = `${stream.value.title} — эфир — ${auth.siteName}`;
     await loadRegistration();
+    await loadCaptions();
     if (stream.value.status === 'live') startAttendance(); else stopAttendance();
   } catch (e) { error.value = e; }
 }
@@ -78,6 +88,11 @@ onMounted(() => {
     ws.on('stream_update', (m) => { if (stream.value && m.stream?.id === stream.value.id) stream.value = { ...stream.value, ...m.stream, hlsUrl: stream.value.hlsUrl, ingest: stream.value.ingest }; }),
     ws.on('live.ended', (m) => { if (stream.value && m.streamId === stream.value.id) load(); }),
     ws.on('viewers', (m) => { if (stream.value && m.streamId === stream.value.id) stream.value = { ...stream.value, viewerCount: m.count }; }),
+    ws.on('live.caption', (m) => {
+      if (!stream.value || m.streamId !== stream.value.id) return;
+      captions.value.push({ seq: m.seq, text: m.text, offsetSec: m.offsetSec });
+      if (captions.value.length > 40) captions.value.splice(0, 20);
+    }),
   );
 });
 onBeforeUnmount(() => { off.forEach((f) => f()); stopAttendance(); });
@@ -88,7 +103,7 @@ watch(() => route.params.id, load);
   <div v-if="error" class="page"><EmptyState :icon="error.status === 401 ? 'lock' : 'live'" :title="error.status === 401 ? 'Требуется вход' : 'Трансляция не найдена'" :text="error.message"><router-link v-if="error.status === 401" :to="{ name: 'login', query: { next: route.fullPath } }" class="btn primary">Войти</router-link></EmptyState></div>
   <div v-else-if="stream" class="live-page">
     <div class="live-main">
-      <VideoPlayer v-if="stream.status === 'live'" :key="playerKey" :qoe-stream-id="stream.id" qoe-source="live" :src="stream.hlsUrl" :poster="stream.thumbnailUrl" live autoplay :allow-theater="false" :allow-mini="false" :title="stream.title" />
+      <VideoPlayer v-if="stream.status === 'live'" :key="playerKey" :qoe-stream-id="stream.id" qoe-source="live" :src="stream.hlsUrl" :poster="stream.thumbnailUrl" live autoplay :allow-theater="false" :allow-mini="false" :title="stream.title" :caption-lines="captionLines" />
       <div v-else class="player live-placeholder">
         <div class="col" style="align-items:center; text-align:center; padding: 24px">
           <Icon name="broadcast" :size="48" />
@@ -137,6 +152,11 @@ watch(() => route.params.id, load);
       </div>
     </div>
     <aside class="live-side">
+      <div v-if="stream.captions && stream.status === 'live'" class="row gap-8 mb-8">
+        <button class="btn sm soft grow" :class="{ active: captionsOn }" @click="captionsOn = !captionsOn">
+          <Icon :name="captionsOn ? 'captionsFill' : 'captions'" :size="16" /> Живые субтитры {{ captionsOn ? 'вкл.' : 'выкл.' }}
+        </button>
+      </div>
       <div class="side-seg mb-8"><button class="side-seg-btn" :class="{ on: side === 'chat' }" @click="side = 'chat'"><Icon name="comment" :size="16" /> Чат</button><button class="side-seg-btn" :class="{ on: side === 'interact' }" @click="side = 'interact'"><Icon name="quizOutline" :size="16" /> Вопросы и опросы</button></div>
       <div class="live-side-body">
         <LiveChat v-show="side === 'chat'" :stream="stream" />

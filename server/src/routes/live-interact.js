@@ -56,6 +56,19 @@ export function streamIcs(s, baseUrl) {
 }
 
 export default async function liveInteractRoutes(app) {
+  // --- Живые субтитры эфира (1.6) ----------------------------------------------------------------
+  /** История реплик: зритель, открывший страницу позже, видит последние строки. */
+  app.get('/live/:id/captions', async (req) => {
+    const s = await viewable(req, req.params.id);
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 40));
+    const rows = await many(
+      'SELECT seq, offset_sec, text, created_at FROM live_captions WHERE stream_id = $1 ORDER BY seq DESC LIMIT $2', [s.id, limit]);
+    return {
+      enabled: !!s.captions,
+      captions: rows.reverse().map((r) => ({ seq: r.seq, offsetSec: Number(r.offset_sec) || 0, text: r.text, at: r.created_at })),
+    };
+  });
+
   // --- Напоминания и календарь -------------------------------------------------------------
   app.post('/live/:id/remind', { preHandler: app.requireActive }, async (req) => {
     const s = await viewable(req, req.params.id);

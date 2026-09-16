@@ -48,6 +48,9 @@ export const router = createRouter({
     { path: '/invite/:token', name: 'invite', component: v('auth/InviteView'), meta: { plain: true } },
     { path: '/account-status', name: 'account-status', component: v('auth/StatusView'), meta: { auth: true, plain: true } },
     { path: '/embed/:id', name: 'embed', component: v('EmbedView'), meta: { embed: true } },
+    // 1.6: комната совместного просмотра и витрина для телевизора в холле
+    { path: '/party/:code', name: 'party', component: v('PartyView'), meta: { active: true } },
+    { path: '/screen/:token', name: 'screen', component: v('ScreenView'), meta: { embed: true } },
     {
       path: '/studio', component: v('studio/StudioLayout'), meta: { active: true },
       children: [
@@ -83,6 +86,7 @@ export const router = createRouter({
         { path: 'live', name: 'admin-live', component: v('admin/AdminLive') },
         { path: 'learning', name: 'admin-learning', component: v('admin/AdminLearning') },
         { path: 'quality', name: 'admin-quality', component: v('admin/AdminQuality') },
+        { path: 'screens', name: 'admin-screens', component: v('admin/AdminScreens') },
         { path: 'settings/:tab?', name: 'admin-settings', component: v('admin/AdminSettings'), meta: { admin: true } },
         { path: 'jobs', name: 'admin-jobs', component: v('admin/AdminJobs') },
         { path: 'audit', name: 'admin-audit', component: v('admin/AdminAudit') },

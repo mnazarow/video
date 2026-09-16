@@ -46,7 +46,7 @@ async function load() {
     video.value = (await get(`/api/videos/${route.params.id}`)).video;
     formFilling = true;
     const v = video.value;
-    form.value = { title: v.title, description: v.description, categoryId: v.categoryId || '', tags: (v.tags || []).join(', '), visibility: v.visibility, commentsMode: v.commentsMode, allowDownload: v.allowDownload, allowEmbed: v.allowEmbed, allowRatings: v.allowRatings, scheduledAt: toLocalInput(v.scheduledAt), language: v.language || 'ru', viewerWatermark: !!v.viewerWatermark, expiresAt: toLocalInput(v.expiresAt), introEnd: v.introEnd ?? null, outroStart: v.outroStart ?? null };
+    form.value = { title: v.title, description: v.description, categoryId: v.categoryId || '', tags: (v.tags || []).join(', '), visibility: v.visibility, commentsMode: v.commentsMode, allowDownload: v.allowDownload, allowEmbed: v.allowEmbed, allowRatings: v.allowRatings, scheduledAt: toLocalInput(v.scheduledAt), language: v.language || 'ru', viewerWatermark: !!v.viewerWatermark, expiresAt: toLocalInput(v.expiresAt), introEnd: v.introEnd ?? null, outroStart: v.outroStart ?? null, premiere: !!v.premiere, premiereChat: v.premiereChat !== false };
     chapters.value = (v.chapters || []).map((c) => ({ ...c }));
     accessUsers.value = v.accessUsers || [];
     accessGroups.value = v.accessGroups || [];
@@ -254,6 +254,12 @@ async function removeTrack(t) {
         <div class="field" style="grid-column: 1 / -1"><label>Теги (через запятую)</label><input class="input" v-model="form.tags" /></div>
         <div class="field"><label>Язык</label><select class="select" v-model="form.language"><option value="ru">Русский</option><option value="en">English</option><option value="uz">Oʻzbek</option><option value="kk">Қазақ</option><option value="de">Deutsch</option></select></div>
         <div class="field"><label>Отложенная публикация</label><input class="input" type="datetime-local" v-model="form.scheduledAt" /><div class="hint">До указанного времени видео видно только вам</div></div>
+        <!-- Премьера: показ по расписанию с обратным отсчётом и чатом (1.6) -->
+        <div class="field" v-if="auth.config?.premiereEnabled !== false && form.scheduledAt">
+          <label class="switch"><input type="checkbox" v-model="form.premiere" /><span></span> Премьера: показать всем одновременно</label>
+          <div class="hint">Анонс с обратным отсчётом появится сразу, а видео откроется в назначенное время. Подписчики получат напоминание за 30 минут.</div>
+          <label v-if="form.premiere" class="switch mt-8"><input type="checkbox" v-model="form.premiereChat" /><span></span> Чат премьеры</label>
+        </div>
         <div class="field"><label>Срок публикации</label><input class="input" type="datetime-local" v-model="form.expiresAt" /><div class="hint">После этой даты видео станет приватным (ссылка и статистика сохранятся)<span v-if="video.expiredAt"> · срок истёк {{ fmtDateTime(video.expiredAt) }}</span></div></div>
         <div class="field"><label>Комментарии</label><select class="select" v-model="form.commentsMode"><option value="open">Разрешены</option><option value="held">Публиковать после проверки</option><option value="disabled">Отключены</option></select></div>
         <div class="field"><label>Конец вступления, с</label><input class="input" type="number" min="0" step="0.5" v-model.number="form.introEnd" placeholder="например 12" /></div>

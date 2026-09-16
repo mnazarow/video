@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { one } from '../db.js';
 import { config } from '../config.js';
-import { canViewVideo, canViewLive, isStaff, shareLinkFor } from '../lib/access.js';
+import { canViewVideo, canPlayVideo, canViewLive, isStaff, shareLinkFor } from '../lib/access.js';
 import { notFound, forbidden, unauthorized } from '../lib/util.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -17,7 +17,7 @@ export function invalidateVideoCache(id) { if (id) videoCache.delete(id); else v
 async function videoForAuth(id) {
   const c = videoCache.get(id);
   if (c && Date.now() - c.at < TTL) return c.v;
-  const v = await one('SELECT id, owner_id, visibility, status, moderation_status, is_blocked, deleted_at, scheduled_at, allow_download, original_kept FROM videos WHERE id = $1', [id]);
+  const v = await one('SELECT id, owner_id, visibility, status, moderation_status, is_blocked, deleted_at, scheduled_at, premiere, allow_download, original_kept FROM videos WHERE id = $1', [id]);
   videoCache.set(id, { v, at: Date.now() });
   if (videoCache.size > 5000) videoCache.delete(videoCache.keys().next().value);
   return v;
@@ -46,8 +46,10 @@ export async function checkMediaAccess(rel, user, shareTokens = null) {
   if (!v) return { ok: false, status: 404 };
   const file = rest.join('/');
   const isOriginal = file.startsWith('original.') || file === 'asr_audio.mp3';
-  // Пока видео обрабатывается, файлы доступны только владельцу/модераторам
-  const allowed = await canViewVideo(v, user, shareTokens);
+  // Пока видео обрабатывается, файлы доступны только владельцу/модераторам.
+  // Премьера до назначенного часа не отдаёт медиа никому, кроме автора и модераторов (кроме обложки).
+  const isPoster = /\.(jpg|jpeg|png|webp)$/.test(file);
+  const allowed = isPoster ? await canViewVideo(v, user, shareTokens) : await canPlayVideo(v, user, shareTokens);
   if (!allowed) return { ok: false, status: user ? 403 : 401 };
   if (isOriginal) {
     const owner = user && user.id === v.owner_id;
@@ -127,7 +129,7 @@ export default async function mediaRoutes(app) {
     const v = await one('SELECT * FROM videos WHERE (id::text = $1 OR short_id = $1) AND deleted_at IS NULL', [req.params.id]);
     if (!v) throw notFound('Видео не найдено');
     const user = await feedTokenUser(req);
-    if (!(await canViewVideo(v, user, req.shareTokens))) throw user ? forbidden() : unauthorized();
+    if (!(await canPlayVideo(v, user, req.shareTokens))) throw user ? forbidden() : unauthorized();
     const owner = user && user.id === v.owner_id;
     if (!(owner || isStaff(user) || (v.allow_download && user))) {
       const link = !req.user && req.shareTokens?.length ? await shareLinkFor(v.id, req.shareTokens) : null;

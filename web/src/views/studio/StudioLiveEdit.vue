@@ -34,7 +34,7 @@ async function load() {
   try {
     const s = await get(`/api/live/${route.params.id}`);
     stream.value = s.stream;
-    form.value = { title: s.stream.title, description: s.stream.description, visibility: s.stream.visibility, categoryId: s.stream.categoryId || '', chatEnabled: s.stream.chatEnabled, record: s.stream.record, scheduledAt: toLocalInput(s.stream.scheduledAt), qaEnabled: s.stream.qaEnabled !== false, pollsEnabled: s.stream.pollsEnabled !== false, registration: !!s.stream.registration, registrationLimit: s.stream.registrationLimit || null, registrationNote: s.stream.registrationNote || '' };
+    form.value = { title: s.stream.title, description: s.stream.description, visibility: s.stream.visibility, categoryId: s.stream.categoryId || '', chatEnabled: s.stream.chatEnabled, record: s.stream.record, scheduledAt: toLocalInput(s.stream.scheduledAt), qaEnabled: s.stream.qaEnabled !== false, pollsEnabled: s.stream.pollsEnabled !== false, registration: !!s.stream.registration, registrationLimit: s.stream.registrationLimit || null, registrationNote: s.stream.registrationNote || '', captions: !!s.stream.captions };
   } catch (e) { error.value = e; }
 }
 onMounted(async () => {
@@ -190,6 +190,11 @@ const whipSupported = computed(() => !!(navigator.mediaDevices && window.RTCPeer
         <div class="field"><label>Категория</label><select class="select" v-model="form.categoryId"><option value="">Без категории</option><option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
         <div class="field"><label>Запланировано на</label><input class="input" type="datetime-local" v-model="form.scheduledAt" /></div>
         <div class="field" style="justify-content: flex-end; gap: 12px"><label class="switch"><input type="checkbox" v-model="form.chatEnabled" /><span class="track"></span><span>Чат зрителей</span></label><label class="switch"><input type="checkbox" v-model="form.record" /><span class="track"></span><span>Записывать эфир</span></label></div>
+        <!-- Живые субтитры эфира (1.6): распознавание речи по ходу трансляции -->
+        <div class="field" v-if="auth.config?.liveCaptions">
+          <label class="switch"><input type="checkbox" v-model="form.captions" /><span class="track"></span><span>Живые субтитры</span></label>
+          <div class="hint">Речь распознаётся по ходу эфира: зрители видят субтитры поверх видео, а у записи они сразу появятся отдельной дорожкой.</div>
+        </div>
         <div class="field" style="grid-column: 1 / -1; flex-direction: row; gap: 24px; flex-wrap: wrap"><label class="switch"><input type="checkbox" v-model="form.qaEnabled" /><span class="track"></span><span>Вопросы спикеру (Q&amp;A с голосованием)</span></label><label class="switch"><input type="checkbox" v-model="form.pollsEnabled" /><span class="track"></span><span>Опросы зрителей</span></label><span class="small muted">Запланированный эфир: зрители могут включить напоминание и добавить событие в календарь (.ics)</span></div>
         <div class="field" style="grid-column: 1 / -1"><label class="switch"><input type="checkbox" v-model="form.registration" /><span class="track"></span><span>Вебинар с регистрацией участников</span></label><div class="hint">Зрители записываются заранее, получают напоминание за 15 минут, а вы — список участников и отчёт о посещении на вкладке «Участники».</div></div>
         <template v-if="form.registration">

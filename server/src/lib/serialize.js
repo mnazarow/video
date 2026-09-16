@@ -84,6 +84,11 @@ export function videoCard(v, extra = {}) {
     isLiveRecording: !!v.is_live_recording,
     publishedAt: v.published_at,
     scheduledAt: v.scheduled_at,
+    premiere: !!v.premiere,
+    premiereState: v.premiere && v.scheduled_at
+      ? (Date.now() < new Date(v.scheduled_at).getTime() ? 'scheduled'
+        : (Date.now() < new Date(v.scheduled_at).getTime() + (Number(v.duration) || 0) * 1000 + 15000 ? 'live' : 'done'))
+      : null,
     createdAt: v.created_at,
     categoryId: v.category_id,
     categoryName: v.category_name,
@@ -121,6 +126,7 @@ export function videoFull(v, { renditions = [], subtitles = [], viewer = null, u
     dislikeCount: v.dislike_count || 0,
     watchSeconds: v.watch_seconds || 0,
     commentsMode: v.comments_mode,
+    premiereChat: !!v.premiere_chat,
     allowDownload: !!v.allow_download,
     introEnd: v.intro_end != null ? Number(v.intro_end) : null,
     outroStart: v.outro_start != null ? Number(v.outro_start) : null,
@@ -220,6 +226,7 @@ export function liveOut(s, { viewer = null, withKey = false } = {}) {
     chatEnabled: !!s.chat_enabled,
     record: !!s.record,
     registration: !!s.registration,
+    captions: !!s.captions,
     registrationLimit: s.registration_limit || null,
     registrationNote: s.registration_note || '',
     recordingVideoId: s.recording_video_id,
