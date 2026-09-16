@@ -2,7 +2,8 @@
 import { one, many, query } from '../db.js';
 import { listVisibilitySql, isActive } from '../lib/access.js';
 import { videoCard, userPublic, playlistOut, liveOut } from '../lib/serialize.js';
-import { paging, forbidden, safeHeadline } from '../lib/util.js';
+import { paging, forbidden, badRequest, safeHeadline } from '../lib/util.js';
+import { askLibrary, logAsk } from '../lib/videoqa.js';
 import { VIDEO_SELECT, VIDEO_FROM } from './videos.js';
 
 function dateFilter(d) {
@@ -87,6 +88,18 @@ export default async function searchRoutes(app) {
     }));
     out.total = total.n;
     return out;
+  });
+
+  // --- «Спросите видеотеку»: ответ ИИ с ссылками на моменты (1.5) --------------------------------
+  app.post('/ask', { preHandler: app.requireActive }, async (req) => {
+    if (!req.settings['ai.enabled'] || !req.settings['search.ask_enabled']) throw forbidden('ИИ-поиск по видеотеке отключён администратором');
+    const q = String(req.body?.q || '').trim().slice(0, 300);
+    if (q.length < 5) throw badRequest('Сформулируйте вопрос подробнее');
+    const started = Date.now();
+    const res = await askLibrary(q, req.user, { settings: req.settings });
+    const ms = Date.now() - started;
+    if (!res.empty) await logAsk({ userId: req.user.id, question: q, answer: res.answer, sources: res.sources, ms }).catch(() => {});
+    return { ...res, ms };
   });
 
   app.get('/suggest', async (req) => {

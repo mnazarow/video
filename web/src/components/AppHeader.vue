@@ -48,10 +48,16 @@ const canUpload = computed(() => auth.isActive && auth.canUpload);
 .app-header .hr { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .only-mobile { display: none !important; }
 @media (max-width: 767px) {
-  .app-header { grid-template-columns: 1fr auto; padding: 0 8px; gap: 8px; }
+  .app-header { grid-template-columns: minmax(0, 1fr) auto; padding: 0 8px; gap: 8px; }
+  .app-header .hl, .app-header .brand { min-width: 0; overflow: hidden; }
+  .app-header .brand-logo, .app-header .brand-logo img { height: 26px !important; }
+  .app-header .brand-logo .video-word { font-size: 22px !important; }
   .app-header .hc { display: none; }
   .app-header .hc.open { display: block; position: absolute; left: 0; right: 0; top: var(--header-h); padding: 8px; background: var(--surface); border-bottom: 1px solid var(--line-2); }
   .hide-mobile { display: none !important; }
   .only-mobile { display: inline-flex !important; }
+}
+@media (max-width: 539px) {
+  .app-header .brand-logo .video-word { display: none; }
 }
 </style>

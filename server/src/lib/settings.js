@@ -42,6 +42,11 @@ export const DEFAULTS = {
   'player.logo': false,                 // логотип портала поверх видео
   'player.skip_intro': true,            // кнопка «Пропустить вступление»
   'a11y.high_contrast_default': false,  // режим повышенной контрастности по умолчанию
+  // 1.5 — вебинары, ИИ-поиск, качество воспроизведения
+  'search.ask_enabled': true,           // «Спросите видеотеку» (нужен ИИ-помощник)
+  'qoe.enabled': true,                  // сбор метрик качества воспроизведения
+  'qoe.retention_days': 90,             // сколько хранить сеансы воспроизведения
+  'webinar.attendance_min_percent': 50, // с какой доли эфира считать участие засчитанным
   // Загрузка и обработка
   'upload.max_size_mb': 8192,
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
@@ -348,6 +353,9 @@ export async function publicSettings() {
     playerLogo: s['player.logo'],
     skipIntro: s['player.skip_intro'],
     highContrastDefault: s['a11y.high_contrast_default'],
+    // 1.5
+    askEnabled: s['search.ask_enabled'] && s['ai.enabled'],
+    qoeEnabled: s['qoe.enabled'],
   };
 }
 

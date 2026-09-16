@@ -206,7 +206,10 @@ export async function sendLiveReminders() {
   const due = await many(`SELECT s.*, u.display_name AS owner_name FROM live_streams s JOIN users u ON u.id = s.owner_id WHERE s.scheduled_at IS NOT NULL AND s.reminded_at IS NULL AND s.status <> 'ended' AND s.scheduled_at <= now() + interval '15 minutes' AND s.scheduled_at > now() - interval '30 minutes'`);
   let sent = 0;
   for (const s of due) {
-    const users = await many('SELECT user_id FROM live_reminders WHERE stream_id = $1', [s.id]);
+    // Напоминание получают все, кто нажал «напомнить», и все зарегистрированные на вебинар
+    const users = await many(
+      `SELECT user_id FROM live_reminders WHERE stream_id = $1
+       UNION SELECT user_id FROM live_registrations WHERE stream_id = $1 AND user_id IS NOT NULL`, [s.id]);
     for (const u of users) {
       await notify(u.user_id, { type: 'live_reminder', title: `Скоро эфир: ${s.title}`, body: `Начало ${new Date(s.scheduled_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} · ${s.owner_name}`, link: `/live/${s.short_id}`, actorId: s.owner_id, data: { streamId: s.id } });
       sent++;

@@ -1,6 +1,6 @@
 {
   "name": "corpvideo-server",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "CorpVideo — корпоративный видеохостинг: API-сервер и воркер обработки видео",
   "type": "module",
   "private": true,

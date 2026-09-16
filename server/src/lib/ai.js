@@ -32,6 +32,14 @@ function extractJson(text) {
 
 const fmt = (sec) => { const s = Math.max(0, Math.round(sec)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + ':' + String(x).padStart(2, '0'); };
 
+/** Прямой вызов модели: messages → JSON (или текст при json=false). Используется ИИ-поиском по видеотеке. */
+export async function askAi(messages, { settings = null, json = true, timeoutMs } = {}) {
+  const s = settings || await getSettings('ai.');
+  if (!s['ai.enabled']) throw new Error('ИИ-помощник отключён в настройках');
+  const text = await chat(s, messages, { json, timeoutMs });
+  return json ? extractJson(text) : text;
+}
+
 /**
  * Предложения по транскрипту: название, описание (конспект), главы, теги.
  * transcript — массив {start,end,text} (сегменты субтитров) или строка.

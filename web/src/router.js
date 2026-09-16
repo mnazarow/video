@@ -82,6 +82,7 @@ export const router = createRouter({
         { path: 'categories', name: 'admin-categories', component: v('admin/AdminCategories') },
         { path: 'live', name: 'admin-live', component: v('admin/AdminLive') },
         { path: 'learning', name: 'admin-learning', component: v('admin/AdminLearning') },
+        { path: 'quality', name: 'admin-quality', component: v('admin/AdminQuality') },
         { path: 'settings/:tab?', name: 'admin-settings', component: v('admin/AdminSettings'), meta: { admin: true } },
         { path: 'jobs', name: 'admin-jobs', component: v('admin/AdminJobs') },
         { path: 'audit', name: 'admin-audit', component: v('admin/AdminAudit') },

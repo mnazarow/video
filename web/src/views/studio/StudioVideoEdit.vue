@@ -67,7 +67,6 @@ onMounted(async () => {
 onBeforeUnmount(() => off.forEach((f) => f()));
 watch(() => route.params.id, load);
 watch(form, () => { if (!formFilling) dirty.value = true; }, { deep: true });
-watch(tab, (t) => { if (t === 'subtitles') loadTracks(); }, { immediate: true });
 
 // Не теряем несохранённые сведения при уходе со страницы (переключение вкладок того же видео — не уход)
 function warnUnsaved(e) { if (dirty.value) { e.preventDefault(); e.returnValue = ''; } }
@@ -121,8 +120,8 @@ async function autoChapters() { await save({ chapters: 'auto', description: form
 const subs = ref([]);
 const subForm = ref({ language: 'ru', label: 'Русский' });
 async function loadSubs() { subs.value = (await get(`/api/videos/${video.value.id}/subtitles`)).subtitles; }
-watch(tab, (t) => { if (t === 'subtitles' && video.value) loadSubs(); if (t === 'analytics' && video.value) { loadAnalytics(); loadViewers(); } if (t === 'access') loadGroups(); }, { immediate: false });
-watch(video, (v, old) => { if (v && !old) { if (tab.value === 'subtitles') loadSubs(); if (tab.value === 'analytics') { loadAnalytics(); loadViewers(); } if (tab.value === 'access') loadGroups(); } });
+watch(tab, (t) => { if (t === 'subtitles' && video.value) { loadSubs(); loadTracks(); } if (t === 'analytics' && video.value) { loadAnalytics(); loadViewers(); } if (t === 'access') loadGroups(); }, { immediate: false });
+watch(video, (v, old) => { if (v && !old) { if (tab.value === 'subtitles') { loadSubs(); loadTracks(); } if (tab.value === 'analytics') { loadAnalytics(); loadViewers(); } if (tab.value === 'access') loadGroups(); } });
 async function uploadSub(e) { const f = e.target.files[0]; if (!f) return; try { await uploadFile(`/api/videos/${video.value.id}/subtitles`, f, { fields: { language: subForm.value.language, label: subForm.value.label } }); await loadSubs(); ui.toast('Субтитры добавлены', { type: 'success' }); } catch (err) { ui.toast(err.message, { type: 'error' }); } e.target.value = ''; }
 async function autoSub() { try { await post(`/api/videos/${video.value.id}/subtitles/auto`, { language: subForm.value.language }); await loadSubs(); ui.toast('Распознавание речи запущено — это может занять несколько минут'); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
 async function removeSub(s) { await del(`/api/videos/${video.value.id}/subtitles/${s.id}`); loadSubs(); }

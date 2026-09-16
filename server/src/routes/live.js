@@ -194,6 +194,10 @@ export default async function liveRoutes(app) {
     if (b.chatEnabled !== undefined) add('chat_enabled', !!b.chatEnabled);
     if (b.record !== undefined) add('record', !!b.record);
     if (b.scheduledAt !== undefined) { const d = b.scheduledAt ? new Date(b.scheduledAt) : null; add('scheduled_at', d && !Number.isNaN(d.getTime()) ? d : null); }
+    // Вебинар: регистрация участников (1.5)
+    if (b.registration !== undefined) add('registration', !!b.registration);
+    if (b.registrationLimit !== undefined) add('registration_limit', b.registrationLimit ? Math.max(1, Math.min(100000, Number(b.registrationLimit))) : null);
+    if (b.registrationNote !== undefined) add('registration_note', String(b.registrationNote).slice(0, 1000));
     if (b.status === 'idle' && s.status === 'ended') { add('status', 'idle'); add('started_at', null); add('ended_at', null); add('recording_video_id', null); }
     if (sets.length) { sets.push('updated_at = now()'); await query(`UPDATE live_streams SET ${sets.join(', ')} WHERE id = $1`, params); }
     const full = await loadStream(s.id);

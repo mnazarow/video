@@ -4,6 +4,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import Hls from 'hls.js';
 import { fmtDuration } from '../../utils/format.js';
+import { createQoe } from '../../utils/qoe.js';
 
 const props = defineProps({
   src: { type: String, default: '' },           // HLS master.m3u8
@@ -34,6 +35,11 @@ const props = defineProps({
   introEnd: { type: Number, default: 0 },
   outroStart: { type: Number, default: 0 },
   logo: { type: String, default: '' },
+  // 1.5 — метрики качества воспроизведения
+  qoeVideoId: { type: String, default: '' },
+  qoeStreamId: { type: String, default: '' },
+  qoeSource: { type: String, default: 'watch' },
+  qoe: { type: Boolean, default: true },
 });
 const emit = defineEmits(['progress', 'ended', 'play', 'pause', 'next', 'theater', 'mini', 'error', 'ready', 'timeupdate', 'help', 'react']);
 
@@ -50,6 +56,7 @@ const state = ref({
 });
 const REACTION_ICON = { like: 'thumbUp', love: 'heart', wow: 'sparkles', question: 'help' };
 let hls = null;
+const qoe = createQoe({ videoId: props.qoeVideoId || null, streamId: props.qoeStreamId || null, source: props.qoeSource, enabled: props.qoe });
 let hideTimer = null;
 let progressTimer = null;
 let lastTick = 0;
@@ -194,6 +201,7 @@ function loadSource(opts = {}) {
   const el = video.value;
   if (!el) return;
   state.value.error = ''; state.value.ended = false;
+  qoe.loadStart();
   // Автозапуск можно переопределить: при смене режима «только звук» продолжаем ровно то, что было (пауза — значит пауза)
   const wantPlay = opts.autoplay !== undefined ? opts.autoplay : props.autoplay;
   const src = props.src;
@@ -219,7 +227,7 @@ function loadSource(opts = {}) {
       emit('ready');
       if (wantPlay) tryPlay();
     });
-    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => { state.value.autoLevel = data.level; });
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => { state.value.autoLevel = data.level; const l = levels.value[data.level]; if (l) qoe.quality(l.height, l.bitrate); });
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (!data.fatal) return;
       if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -227,7 +235,7 @@ function loadSource(opts = {}) {
         if (data.response?.code === 401 || data.response?.code === 403) { state.value.error = 'Нет доступа к видео. Войдите в систему.'; return; }
         hls.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-      else { state.value.error = 'Не удалось воспроизвести видео'; emit('error', data); }
+      else { state.value.error = 'Не удалось воспроизвести видео'; qoe.error(`${data.type}: ${data.details || ''}`); emit('error', data); }
     });
   } else if (src && el.canPlayType('application/vnd.apple.mpegurl')) {
     el.src = src;
@@ -281,7 +289,7 @@ function onTime() {
   const now = Date.now();
   if (state.value.playing && lastTick) {
     const d = (now - lastTick) / 1000;
-    if (d > 0 && d < 3) watchedDelta += d;
+    if (d > 0 && d < 3) { watchedDelta += d; qoe.watched(d); }
   }
   lastTick = now;
   if (dur.value) {
@@ -301,11 +309,11 @@ function flushProgress(force = false) {
 function onPlay() { state.value.playing = true; state.value.ended = false; lastTick = Date.now(); emit('play'); scheduleHide(); showBig('play'); syncAlt(); }
 function onPause() { state.value.playing = false; lastTick = 0; emit('pause'); state.value.controlsVisible = true; flushProgress(true); showBig('pause'); altAudio?.pause(); }
 function onEnded() { state.value.playing = false; state.value.ended = true; flushProgress(true); emit('ended'); state.value.controlsVisible = true; }
-function onWaiting() { state.value.waiting = true; }
-function onPlaying() { state.value.waiting = false; }
+function onWaiting() { state.value.waiting = true; qoe.waiting(); }
+function onPlaying() { state.value.waiting = false; qoe.firstFrame(); qoe.playing(); }
 function onVolume() { const el = video.value; state.value.volume = el.volume; state.value.mutedState = el.muted; lsSet('volume', el.volume); lsSet('muted', el.muted); }
 function onLoaded() { const el = video.value; if (Number.isFinite(el.duration)) state.value.duration = el.duration; }
-function onError() { if (!hls) state.value.error = 'Ошибка воспроизведения'; }
+function onError() { if (!hls) { state.value.error = 'Ошибка воспроизведения'; qoe.error(video.value?.error?.message || 'media error'); } }
 
 // --- Управление --------------------------------------------------------------------
 function togglePlay() { const el = video.value; if (!el) return; if (el.paused) tryPlay(); else el.pause(); }
@@ -437,7 +445,7 @@ function currentTime() { return video.value?.currentTime || 0; }
 function isPaused() { return video.value?.paused ?? true; }
 defineExpose({ seekTo, togglePlay, currentTime, isPaused, play: tryPlay, pause: () => video.value?.pause(), flushProgress, el: () => video.value, handleKey: onKey });
 
-function onUnload() { flushProgress(true); }
+function onUnload() { flushProgress(true); qoe.stop(); }
 
 onMounted(() => {
   const el = video.value;
@@ -457,6 +465,7 @@ onMounted(() => {
   el.addEventListener('enterpictureinpicture', () => { state.value.pip = true; });
   el.addEventListener('leavepictureinpicture', () => { state.value.pip = false; });
   progressTimer = setInterval(() => { flushProgress(false); syncAlt(); }, 5000);
+  qoe.start();
   window.addEventListener('beforeunload', onUnload);
   // pagehide надёжнее beforeunload на мобильных: там вкладку часто выгружают без него
   window.addEventListener('pagehide', onUnload);
@@ -465,6 +474,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   if (altAudio) { altAudio.pause(); altAudio.remove(); altAudio = null; }
+  qoe.stop();
   flushProgress(true);
   clearInterval(progressTimer);
   clearTimeout(hideTimer);

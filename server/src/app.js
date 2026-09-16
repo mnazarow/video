@@ -34,6 +34,8 @@ import assignmentRoutes from './routes/assignments.js';
 import courseRoutes from './routes/courses.js';
 import engageRoutes from './routes/engage.js';
 import learningRoutes from './routes/learning.js';
+import webinarRoutes from './routes/webinar.js';
+import playbackRoutes from './routes/playback.js';
 import quizRoutes from './routes/quiz.js';
 import noteRoutes from './routes/notes.js';
 import shareRoutes from './routes/share.js';
@@ -119,6 +121,8 @@ export async function buildApp({ logger = true } = {}) {
   await app.register(courseRoutes, { prefix: '/api' });
   await app.register(engageRoutes, { prefix: '/api' });
   await app.register(learningRoutes, { prefix: '/api' });
+  await app.register(webinarRoutes, { prefix: '/api' });
+  await app.register(playbackRoutes, { prefix: '/api' });
   await app.register(quizRoutes, { prefix: '/api' });
   await app.register(noteRoutes, { prefix: '/api' });
   await app.register(shareRoutes, { prefix: '/api' });

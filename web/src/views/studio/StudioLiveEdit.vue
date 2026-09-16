@@ -9,7 +9,7 @@ import LiveChat from '../../components/LiveChat.vue';
 import LiveInteract from '../../components/LiveInteract.vue';
 import VideoPlayer from '../../components/player/VideoPlayer.vue';
 import EmptyState from '../../components/EmptyState.vue';
-import { VISIBILITY, toLocalInput, fmtNumber, timeAgo } from '../../utils/format.js';
+import { VISIBILITY, toLocalInput, fmtNumber, timeAgo, fmtDateTime } from '../../utils/format.js';
 import { copyWithToast } from '../../utils/clipboard.js';
 
 const route = useRoute();
@@ -20,6 +20,12 @@ const stream = ref(null);
 const error = ref(null);
 const showKey = ref(false);
 const form = ref({});
+const attendees = ref(null);
+async function loadAttendees() {
+  attendees.value = null;
+  try { attendees.value = await get(`/api/live/${stream.value.id}/attendees`); }
+  catch (e) { ui.toast(e.message, { type: 'error' }); attendees.value = { people: [], totals: { registered: 0, attended: 0, noShow: 0, avgPercent: 0 } }; }
+}
 const categories = ref([]);
 const tab = ref('setup');
 let off = [];
@@ -28,7 +34,7 @@ async function load() {
   try {
     const s = await get(`/api/live/${route.params.id}`);
     stream.value = s.stream;
-    form.value = { title: s.stream.title, description: s.stream.description, visibility: s.stream.visibility, categoryId: s.stream.categoryId || '', chatEnabled: s.stream.chatEnabled, record: s.stream.record, scheduledAt: toLocalInput(s.stream.scheduledAt), qaEnabled: s.stream.qaEnabled !== false, pollsEnabled: s.stream.pollsEnabled !== false };
+    form.value = { title: s.stream.title, description: s.stream.description, visibility: s.stream.visibility, categoryId: s.stream.categoryId || '', chatEnabled: s.stream.chatEnabled, record: s.stream.record, scheduledAt: toLocalInput(s.stream.scheduledAt), qaEnabled: s.stream.qaEnabled !== false, pollsEnabled: s.stream.pollsEnabled !== false, registration: !!s.stream.registration, registrationLimit: s.stream.registrationLimit || null, registrationNote: s.stream.registrationNote || '' };
   } catch (e) { error.value = e; }
 }
 onMounted(async () => {
@@ -36,6 +42,7 @@ onMounted(async () => {
   categories.value = (await get('/api/feed/categories')).categories;
   off.push(ws.on('stream_status', (m) => { if (stream.value && m.streamId === stream.value.id) load(); }), ws.on('live.started', load), ws.on('live.ended', load));
 });
+watch(tab, (t) => { if (t === 'people' && stream.value) loadAttendees(); });
 onBeforeUnmount(() => { off.forEach((f) => f()); stopBrowser(); });
 
 async function save() { try { const r = await patch(`/api/studio/live/${stream.value.id}`, { ...form.value, categoryId: form.value.categoryId || null, scheduledAt: form.value.scheduledAt ? new Date(form.value.scheduledAt).toISOString() : null }); await patch(`/api/studio/live/${stream.value.id}/interact`, { qaEnabled: form.value.qaEnabled, pollsEnabled: form.value.pollsEnabled }); stream.value = { ...stream.value, ...r.stream, qaEnabled: form.value.qaEnabled, pollsEnabled: form.value.pollsEnabled }; ui.toast('Сохранено', { type: 'success' }); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
@@ -125,7 +132,7 @@ const whipSupported = computed(() => !!(navigator.mediaDevices && window.RTCPeer
         <div class="row wrap gap-8 mt-8"><span class="badge" :class="stream.status === 'live' ? 'live' : stream.status === 'ended' ? '' : 'brand'">{{ { idle: 'Готова к эфиру', live: 'В эфире', ended: 'Завершена' }[stream.status] }}</span><span v-if="stream.status === 'live'" class="small muted"><Icon name="eye" :size="14" style="vertical-align:-2px" /> {{ fmtNumber(stream.viewerCount) }} зрителей • {{ timeAgo(stream.startedAt) }}<span v-if="stream.sourceProtocol"> • {{ stream.sourceProtocol.toUpperCase() }}</span></span></div></div>
       <div class="actions"><router-link :to="`/live/${stream.shortId}`" class="btn" target="_blank"><Icon name="openNew" :size="16" /> Страница эфира</router-link><button v-if="stream.status === 'live'" class="btn danger primary" @click="endStream"><Icon name="stop" :size="18" /> Завершить эфир</button><button v-else-if="stream.status === 'ended'" class="btn" @click="reopen"><Icon name="replay" :size="18" /> Открыть заново</button></div>
     </div>
-    <div class="tabs mb-24"><button class="tab" :class="{ active: tab === 'setup' }" @click="tab = 'setup'">Подключение</button><button class="tab" :class="{ active: tab === 'browser' }" @click="tab = 'browser'" v-if="whipSupported">Эфир из браузера</button><button class="tab" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">Настройки</button><button class="tab" :class="{ active: tab === 'chat' }" @click="tab = 'chat'">Чат и просмотр</button><button class="tab" :class="{ active: tab === 'interact' }" @click="tab = 'interact'">Опросы и вопросы</button></div>
+    <div class="tabs mb-24"><button class="tab" :class="{ active: tab === 'setup' }" @click="tab = 'setup'">Подключение</button><button class="tab" :class="{ active: tab === 'browser' }" @click="tab = 'browser'" v-if="whipSupported">Эфир из браузера</button><button class="tab" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">Настройки</button><button class="tab" :class="{ active: tab === 'chat' }" @click="tab = 'chat'">Чат и просмотр</button><button class="tab" :class="{ active: tab === 'interact' }" @click="tab = 'interact'">Опросы и вопросы</button><button class="tab" :class="{ active: tab === 'people' }" @click="tab = 'people'">Участники</button></div>
 
     <div v-if="tab === 'setup'" class="two-col">
       <div class="col gap-24">
@@ -184,8 +191,41 @@ const whipSupported = computed(() => !!(navigator.mediaDevices && window.RTCPeer
         <div class="field"><label>Запланировано на</label><input class="input" type="datetime-local" v-model="form.scheduledAt" /></div>
         <div class="field" style="justify-content: flex-end; gap: 12px"><label class="switch"><input type="checkbox" v-model="form.chatEnabled" /><span class="track"></span><span>Чат зрителей</span></label><label class="switch"><input type="checkbox" v-model="form.record" /><span class="track"></span><span>Записывать эфир</span></label></div>
         <div class="field" style="grid-column: 1 / -1; flex-direction: row; gap: 24px; flex-wrap: wrap"><label class="switch"><input type="checkbox" v-model="form.qaEnabled" /><span class="track"></span><span>Вопросы спикеру (Q&amp;A с голосованием)</span></label><label class="switch"><input type="checkbox" v-model="form.pollsEnabled" /><span class="track"></span><span>Опросы зрителей</span></label><span class="small muted">Запланированный эфир: зрители могут включить напоминание и добавить событие в календарь (.ics)</span></div>
+        <div class="field" style="grid-column: 1 / -1"><label class="switch"><input type="checkbox" v-model="form.registration" /><span class="track"></span><span>Вебинар с регистрацией участников</span></label><div class="hint">Зрители записываются заранее, получают напоминание за 15 минут, а вы — список участников и отчёт о посещении на вкладке «Участники».</div></div>
+        <template v-if="form.registration">
+          <div class="field"><label>Ограничение мест</label><input class="input" type="number" min="1" v-model.number="form.registrationLimit" placeholder="без ограничения" /></div>
+          <div class="field" style="grid-column: 2 / -1"><label>Пояснение при регистрации</label><input class="input" v-model="form.registrationNote" maxlength="200" placeholder="Например: только для отдела продаж" /></div>
+        </template>
       </div>
       <div class="form-actions"><button class="btn primary" @click="save">Сохранить</button><button class="btn ghost danger" :disabled="stream.status === 'live'" @click="remove">Удалить трансляцию</button></div>
+    </div>
+
+    <div v-else-if="tab === 'people'" class="panel">
+      <div class="row mb-8" style="align-items:center">
+        <h3 class="grow">Участники вебинара</h3>
+        <a class="btn ghost sm" :href="`/api/live/${stream.id}/attendees?format=csv`"><Icon name="csv" :size="16" /> CSV</a>
+        <button class="btn ghost sm" @click="loadAttendees"><Icon name="refresh" :size="16" /> Обновить</button>
+      </div>
+      <p v-if="!form.registration" class="small muted">Регистрация выключена — в списке будут только те, кто смотрел эфир. Включить регистрацию можно на вкладке «Настройки».</p>
+      <div v-if="!attendees" class="loading-block"><div class="spin"></div></div>
+      <template v-else>
+        <div class="row wrap gap-16 mb-8 small">
+          <span>Зарегистрировано: <b>{{ attendees.totals.registered }}</b></span>
+          <span>Были на эфире: <b>{{ attendees.totals.attended }}</b></span>
+          <span v-if="attendees.totals.noShow">Не пришли: <b>{{ attendees.totals.noShow }}</b></span>
+          <span v-if="attendees.totals.avgPercent">Средняя доля просмотра: <b>{{ attendees.totals.avgPercent }}%</b></span>
+        </div>
+        <div class="table-wrap"><table class="table"><thead><tr><th>Участник</th><th>Регистрация</th><th>Был на эфире</th><th>Время</th><th>Доля</th></tr></thead><tbody>
+          <tr v-for="p in attendees.people" :key="p.id">
+            <td><b>{{ p.displayName }}</b><div class="tiny muted">{{ p.email }}</div></td>
+            <td class="small muted">{{ p.registeredAt ? fmtDateTime(p.registeredAt) : '—' }}</td>
+            <td><span class="badge" :class="p.attended ? 'success' : ''">{{ p.attended ? 'да' : 'нет' }}</span></td>
+            <td class="small">{{ p.seconds ? Math.max(1, Math.round(p.seconds / 60)) + ' мин' : '—' }}</td>
+            <td class="small">{{ p.percent === null ? '—' : p.percent + '%' }}</td>
+          </tr>
+          <tr v-if="!attendees.people.length"><td colspan="5" class="muted">Пока никто не записался и не смотрел</td></tr>
+        </tbody></table></div>
+      </template>
     </div>
 
     <div v-else-if="tab === 'chat'" class="two-col">

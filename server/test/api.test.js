@@ -1216,6 +1216,75 @@ test('папка автоимпорта и пробный дайджест', asy
   await user.del(`/api/videos/${editVideoId}`);
 });
 
+test('вебинары: регистрация, присутствие, отчёт и напоминания', async () => {
+  const st = await admin.post('/api/studio/live', { title: `Вебинар теста ${stamp}`, scheduledAt: new Date(Date.now() + 3600000).toISOString() });
+  assert.equal(st.status, 200, st.text);
+  const sid = st.json.stream.id; const short = st.json.stream.shortId;
+
+  // Без регистрации записаться нельзя
+  const early = await user.post(`/api/live/${sid}/registration`, {});
+  assert.equal(early.status, 400, 'регистрация выключена — 400');
+
+  const on = await admin.patch(`/api/studio/live/${sid}`, { registration: true, registrationLimit: 2, registrationNote: 'Только отдел продаж' });
+  assert.equal(on.json.stream.registration, true, on.text);
+
+  const state = await user.get(`/api/live/${short}/registration`);
+  assert.equal(state.json.enabled, true);
+  assert.equal(state.json.seatsLeft, 2);
+  assert.equal(state.json.note, 'Только отдел продаж');
+
+  const reg = await user.post(`/api/live/${sid}/registration`, {});
+  assert.equal(reg.status, 200, reg.text);
+  const state2 = await user.get(`/api/live/${short}/registration`);
+  assert.equal(state2.json.registered, true);
+  assert.equal(state2.json.count, 1);
+  assert.equal(state2.json.seatsLeft, 1);
+
+  // Присутствие: за один сигнал засчитывается не больше 120 секунд
+  await user.post(`/api/live/${sid}/attendance`, { seconds: 90 });
+  await user.post(`/api/live/${sid}/attendance`, { seconds: 9999 });
+  const rep = await admin.get(`/api/live/${sid}/attendees`);
+  assert.equal(rep.status, 200, rep.text);
+  const row = rep.json.people.find((p) => p.email === userEmail) || rep.json.people[0];
+  assert.equal(row.seconds, 210, 'учтено 90 + 120 секунд');
+  assert.equal(rep.json.totals.registered, 1);
+  assert.equal(rep.json.totals.attended, 1);
+  const csv = await admin.get(`/api/live/${sid}/attendees?format=csv`);
+  assert.match(csv.text, /Был на эфире/);
+
+  // Отчёт доступен только организатору
+  const foreign = await user.get(`/api/live/${sid}/attendees`);
+  assert.equal(foreign.status, 403, 'чужой отчёт закрыт');
+
+  // Отмена регистрации
+  await user.del(`/api/live/${sid}/registration`);
+  const state3 = await user.get(`/api/live/${short}/registration`);
+  assert.equal(state3.json.registered, false);
+  assert.equal(state3.json.count, 0);
+  await admin.del(`/api/studio/live/${sid}`);
+});
+
+test('качество воспроизведения: приём метрик и сводка', async () => {
+  const vlist = await admin.get('/api/studio/videos?limit=5');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready');
+  const key = `t${Date.now().toString(36)}qoe`;
+  const p1 = await user.post('/api/playback', { sessionKey: key, videoId: v.id, startupMs: 700, watchSec: 10, rebufferCount: 1, rebufferMs: 500, qualityHeight: 720, bitrateKbps: 2000, started: true, device: 'mobile', browser: 'chrome', source: 'watch' });
+  assert.equal(p1.status, 200, p1.text);
+  // Повторный сигнал того же сеанса не задваивает счётчики, а обновляет их
+  const p2 = await user.post('/api/playback', { sessionKey: key, videoId: v.id, watchSec: 30, rebufferCount: 2, rebufferMs: 800, started: true });
+  assert.equal(p2.status, 200, p2.text);
+  const bad = await user.post('/api/playback', { sessionKey: 'к!', videoId: v.id });
+  assert.equal(bad.status, 400, 'некорректный ключ сеанса отклонён');
+
+  const q = await admin.get('/api/admin/quality?days=1');
+  assert.equal(q.status, 200, q.text);
+  assert.ok(q.json.totals.sessions >= 1, 'сеансы учтены');
+  assert.ok(q.json.totals.startupMedianMs >= 1, 'измерено время старта');
+  assert.ok(q.json.byDevice.some((d) => d.device === 'mobile'), 'есть разрез по устройствам');
+  const csv = await admin.get('/api/admin/quality?days=1&format=csv');
+  assert.match(csv.text, /Доля буферизации/);
+});
+
 test('курсы: создание, шаги, публикация, прохождение, сертификат, отчёт и назначение', async () => {
   const stampC = Date.now().toString(36);
   const cr = await admin.post('/api/courses', { title: `Курс ${stampC}`, description: 'Проверочный курс', requiredPercent: 20 });
@@ -1301,7 +1370,9 @@ test('реакции по таймкоду, тепловая карта, зву�
   const rep = await admin.get(`/api/videos/${v.shortId}/reactions/report`);
   assert.equal(rep.status, 200, rep.text);
 
-  // Тепловая карта: автору видна всегда, зрителю — только при достаточном числе просмотров
+  // Тепловая карта: автору видна всегда, зрителю — только при достаточном числе просмотров.
+  // Кривая строится по данным удержания, поэтому сначала отправляем просмотр с отметками участков.
+  await user.post(`/api/videos/${v.shortId}/progress`, { position: 3, watchedDelta: 3, buckets: [0, 1, 2, 3, 4] });
   const hmOwner = await admin.get(`/api/videos/${v.shortId}/heatmap`);
   assert.equal(hmOwner.json.available, true, 'автор видит кривую');
   assert.equal(hmOwner.json.points.length, 100);

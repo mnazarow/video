@@ -9,6 +9,9 @@ import PlaylistCard from '../components/PlaylistCard.vue';
 import LiveCard from '../components/LiveCard.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { fmtSubs, fmtNumber } from '../utils/format.js';
+import { post } from '../api.js';
+import { useAuth } from '../stores/auth.js';
+import { useUi } from '../stores/ui.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -22,6 +25,24 @@ function setQuery(patch) { router.push({ query: { ...route.query, ...patch, page
 const activeFilters = computed(() => Object.values(f.value).filter(Boolean).length);
 watch(type, () => { list.items.value = []; });
 const TYPES = [['video', 'Видео'], ['channel', 'Каналы'], ['playlist', 'Плейлисты'], ['live', 'Трансляции']];
+
+// 1.5: «Спросите видеотеку» — ответ ИИ с ссылками на моменты видео
+const auth = useAuth();
+const ui = useUi();
+const ask = ref({ open: false, loading: false, answer: '', sources: [], empty: false, asked: '' });
+const canAsk = computed(() => auth.isActive && auth.config?.askEnabled !== false && q.value.trim().length >= 5);
+async function askLibrary() {
+  if (!canAsk.value || ask.value.loading) return;
+  ask.value = { open: true, loading: true, answer: '', sources: [], empty: false, asked: q.value };
+  try {
+    const r = await post('/api/search/ask', { q: q.value });
+    ask.value = { open: true, loading: false, answer: r.answer || '', sources: r.sources || [], empty: !!r.empty, asked: q.value };
+  } catch (e) {
+    ask.value.loading = false;
+    ui.toast(e.message, { type: 'error' });
+  }
+}
+watch(q, () => { ask.value = { open: false, loading: false, answer: '', sources: [], empty: false, asked: '' }; });
 </script>
 
 <template>
@@ -33,6 +54,35 @@ const TYPES = [['video', 'Видео'], ['channel', 'Каналы'], ['playlist'
     <div class="tabs mb-16">
       <button v-for="[k, l] in TYPES" :key="k" class="tab" :class="{ active: type === k }" @click="setQuery({ type: k })">{{ l }}</button>
     </div>
+    <div v-if="type === 'video' && q && auth.isActive && auth.config?.askEnabled !== false" class="panel ask-panel mb-16">
+      <div v-if="!ask.open" class="row gap-8" style="align-items:center">
+        <Icon name="sparkles" :size="20" style="color:var(--brand)" />
+        <div class="grow small">Не нашли нужное? Спросите видеотеку — ИИ ответит по расшифровкам речи и покажет момент в видео.</div>
+        <button class="btn sm primary" :disabled="!canAsk" @click="askLibrary">Спросить о «{{ q.length > 30 ? q.slice(0, 30) + '…' : q }}»</button>
+      </div>
+      <template v-else>
+        <div class="row gap-8 mb-8" style="align-items:center">
+          <Icon name="sparkles" :size="20" style="color:var(--brand)" />
+          <b class="grow">Ответ по видеотеке</b>
+          <button class="ibtn sm" title="Скрыть" @click="ask.open = false"><Icon name="close" :size="16" /></button>
+        </div>
+        <div v-if="ask.loading" class="row gap-8" style="align-items:center"><div class="spin"></div><span class="small muted">Читаю расшифровки видео…</span></div>
+        <template v-else>
+          <p v-if="ask.empty && !ask.answer" class="small muted" style="margin:0">В видеотеке не нашлось ответа на этот вопрос. Попробуйте переформулировать или уточнить термины.</p>
+          <p v-else class="ask-answer" style="white-space:pre-line">{{ ask.answer }}</p>
+          <div v-if="ask.sources.length" class="col gap-4 mt-8">
+            <div class="tiny muted">Источники — нажмите, чтобы открыть видео с нужной секунды:</div>
+            <router-link v-for="src in ask.sources" :key="src.n + src.shortId" class="ask-src" :to="src.url">
+              <span class="ask-num">[{{ src.n }}]</span>
+              <span class="grow ellipsis">{{ src.title }}</span>
+              <span class="tiny muted nowrap">{{ src.kind === 'screen' ? 'текст на экране' : 'расшифровка' }} · {{ src.timeLabel }}</span>
+            </router-link>
+          </div>
+          <div class="tiny muted mt-8">Ответ составлен ИИ по фрагментам видео — проверяйте по источникам.</div>
+        </template>
+      </template>
+    </div>
+
     <div v-if="showFilters && type === 'video'" class="panel soft mb-24 filters">
       <div class="form-grid">
         <div class="field"><label>Сортировка</label><select class="select" :value="f.sort" @change="setQuery({ sort: $event.target.value })"><option value="">По релевантности</option><option value="date">По дате</option><option value="views">По просмотрам</option><option value="rating">По оценкам</option></select></div>
@@ -69,6 +119,14 @@ const TYPES = [['video', 'Видео'], ['channel', 'Каналы'], ['playlist'
     </template>
   </div>
 </template>
+
+<style scoped>
+.ask-panel { border-left: 3px solid var(--brand); }
+.ask-answer { margin: 0; font-size: 15px; line-height: 1.5; }
+.ask-src { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; color: inherit; text-decoration: none; }
+.ask-src:hover { background: var(--surface-2); }
+.ask-num { color: var(--brand); font-weight: 600; }
+</style>
 
 <style>
 .channel-row { display: flex; gap: 20px; align-items: center; color: var(--text); }

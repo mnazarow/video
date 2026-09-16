@@ -420,6 +420,16 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             </div>
             <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('engage.'))">Сохранить</button></div>
           </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="sparkles" :size="20" style="vertical-align:-4px" /> Спросите видеотеку и качество просмотра</h3>
+            <p class="small muted">ИИ отвечает на вопрос сотрудника по расшифровкам речи и тексту с экрана и показывает ссылки на нужные секунды видео (нужен включённый ИИ-помощник). Метрики качества — время до первого кадра, буферизации и ошибки — собираются плеером и видны в разделе «Администрирование → Качество».</p>
+            <label class="switch"><input type="checkbox" v-model="s['search.ask_enabled']" /><span class="track"></span><span>«Спросите видеотеку» (ИИ-поиск по расшифровкам)</span></label>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['qoe.enabled']" /><span class="track"></span><span>Собирать метрики качества воспроизведения</span></label>
+            <div class="form-grid">
+              <div class="field"><label>Хранить сеансы воспроизведения, дней</label><input class="input" type="number" min="7" max="730" v-model.number="s['qoe.retention_days']" /></div>
+              <div class="field"><label>Засчитывать участие в вебинаре от, %</label><input class="input" type="number" min="1" max="100" v-model.number="s['webinar.attendance_min_percent']" /></div>
+            </div>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('search.'), ...prefix('qoe.'), ...prefix('webinar.')])">Сохранить</button></div>
+          </div>
           <div class="panel"><h3 class="mb-8"><Icon name="tune" :size="20" style="vertical-align:-4px" /> Плеер и доступность</h3>
             <p class="small muted">Кнопка «Пропустить вступление» появляется, если у видео заданы границы заставки (студия → «Сведения»). Размер субтитров и подложку зритель настраивает сам в меню плеера.</p>
             <label class="switch"><input type="checkbox" v-model="s['player.skip_intro']" /><span class="track"></span><span>Кнопка «Пропустить вступление»</span></label>

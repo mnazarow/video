@@ -21,6 +21,7 @@ const NAV = [
   { to: '/admin/reports', label: 'Жалобы', icon: 'flag', badge: 'reports' },
   { to: '/admin/live', label: 'Трансляции', icon: 'broadcast', badge: 'live' },
   { to: '/admin/learning', label: 'Обучение', icon: 'school' },
+  { to: '/admin/quality', label: 'Качество', icon: 'speed' },
   { to: '/admin/categories', label: 'Категории', icon: 'folder' },
   { to: '/admin/jobs', label: 'Очередь заданий', icon: 'listStatus', badge: 'jobs' },
   { to: '/admin/settings', label: 'Настройки', icon: 'settings', admin: true },

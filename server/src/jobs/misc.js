@@ -127,6 +127,9 @@ async function maintenanceBody(job, ctx) {
     const raw = s['retention.raw_views_days'] || 400;
     await query(`DELETE FROM video_views WHERE last_at < now() - ($1 || ' days')::interval`, [String(Math.max(hist, raw))]);
     await query(`DELETE FROM audit_log WHERE created_at < now() - ($1 || ' days')::interval`, [String(s['retention.audit_days'] || 730)]);
+    // Сеансы воспроизведения (качество) и журнал вопросов к видеотеке
+    await query(`DELETE FROM playback_sessions WHERE created_at < now() - ($1 || ' days')::interval`, [String(s['qoe.retention_days'] || 90)]);
+    await query(`DELETE FROM ai_search_log WHERE created_at < now() - interval '180 days'`);
     await query(`DELETE FROM search_history WHERE created_at < now() - interval '180 days'`);
     // Корзина: окончательно удаляем видео, стёртые давнее retention.trash_days (файлы и записи)
     const trashDays = Math.max(1, Number(s['retention.trash_days']) || 30);

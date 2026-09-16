@@ -352,6 +352,7 @@ onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptT
             :heatmap="heatmap" :reaction-marks="reactions.marks" :reaction-kinds="reactions.canReact ? reactions.kinds : []" :audio-tracks="audioTracks"
             :intro-end="auth.config?.skipIntro === false ? 0 : (video.introEnd || 0)" :outro-start="auth.config?.skipIntro === false ? 0 : (video.outroStart || 0)"
             :logo="auth.config?.playerLogo ? (auth.config?.logoUrl || '/icons/icon-192.png') : ''"
+            :qoe-video-id="video.id" qoe-source="watch" :qoe="auth.config?.qoeEnabled !== false"
             @progress="onProgress" @ended="onEnded" @play="ended = false" @next="goNext" @theater="toggleTheater" @mini="openMini" @help="helpOpen = true" @react="onReact">
             <template #overlay>
               <ViewerWatermark v-if="watermarkText" :text="watermarkText" />
