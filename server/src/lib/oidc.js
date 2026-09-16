@@ -51,7 +51,7 @@ export async function startLogin(s, redirectUri, nextUrl = '/') {
   u.searchParams.set('nonce', nonce);
   u.searchParams.set('code_challenge', challenge);
   u.searchParams.set('code_challenge_method', 'S256');
-  return u.toString();
+  return { url: u.toString(), state };
 }
 
 function decodeJwt(token) {
@@ -93,17 +93,20 @@ async function verifyIdToken(token, conf, s, nonce) {
   }
   if (!ok) throw new Error('Подпись id_token недействительна');
   const issuer = String(s['oidc.issuer']).replace(/\/+$/, '');
-  if (payload.iss && String(payload.iss).replace(/\/+$/, '') !== issuer && String(payload.iss).replace(/\/+$/, '') !== String(conf.issuer || '').replace(/\/+$/, '')) throw new Error('id_token выдан другим провайдером');
+  if (!payload.iss) throw new Error('id_token без издателя (iss)');
+  if (String(payload.iss).replace(/\/+$/, '') !== issuer && String(payload.iss).replace(/\/+$/, '') !== String(conf.issuer || '').replace(/\/+$/, '')) throw new Error('id_token выдан другим провайдером');
   const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (!aud.includes(s['oidc.client_id'])) throw new Error('id_token предназначен другому клиенту');
   if (payload.exp && payload.exp * 1000 < Date.now() - 60000) throw new Error('id_token просрочен');
-  if (nonce && payload.nonce && payload.nonce !== nonce) throw new Error('nonce не совпадает');
+  if (nonce && payload.nonce !== nonce) throw new Error('nonce не совпадает');
   return payload;
 }
 
 /** Завершение входа: обмен кода на токены, проверка id_token, сведения о пользователе. */
-export async function finishLogin(s, redirectUri, { code, state }) {
+export async function finishLogin(s, redirectUri, { code, state, boundState }) {
   if (!code || !state) throw new Error('Провайдер не вернул код авторизации');
+  // Привязка к браузеру: без неё чужой (заранее полученный) code+state завершил бы вход в аккаунт атакующего
+  if (!boundState || boundState !== state) throw new Error('Не найдена начатая сессия входа в этом браузере — начните вход заново');
   const st = await one('DELETE FROM oidc_states WHERE state = $1 RETURNING *', [state]);
   if (!st) throw new Error('Сессия входа устарела — попробуйте ещё раз');
   const conf = await discover(s['oidc.issuer']);

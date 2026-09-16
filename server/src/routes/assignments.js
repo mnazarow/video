@@ -2,7 +2,7 @@
 import { one, many, query, tx } from '../db.js';
 import { badRequest, forbidden, notFound, paging } from '../lib/util.js';
 import { canAssign, canEditVideo, isStaff } from '../lib/access.js';
-import { assignmentOut, assignmentReport, assignmentVideos, notifyAssigned, remindAssignment, seedProgress } from '../lib/assignments.js';
+import { assignmentOut, assignmentReport, assignmentSummaries, assignmentTargets, assignmentVideos, notifyAssigned, remindAssignment, seedProgress } from '../lib/assignments.js';
 import { toCsv, sendCsv } from '../lib/csv.js';
 import { audit } from '../lib/audit.js';
 import { videoCard } from '../lib/serialize.js';
@@ -56,12 +56,13 @@ export default async function assignmentRoutes(app) {
     const total = await one(`SELECT count(*)::int AS n FROM ${A_FROM} ${w}`, params);
     params.push(limit, offset);
     const rows = await many(`SELECT ${A_SELECT} FROM ${A_FROM} ${w} ORDER BY a.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
-    const out = [];
-    for (const a of rows) {
-      const r = await assignmentReport(a);
-      const targets = await many('SELECT t.*, g.name AS group_name, u.display_name AS user_name FROM assignment_targets t LEFT JOIN groups g ON g.id = t.group_id LEFT JOIN users u ON u.id = t.user_id WHERE t.assignment_id = $1', [a.id]);
-      out.push(assignmentOut(a, { total: r.total, completed: r.completed, overdue: r.overdue, targets: targets.map(targetOut) }));
-    }
+    // Сводка и адресаты — пачкой на всю страницу (раньше было по три запроса на каждую строку)
+    const ids = rows.map((a) => a.id);
+    const [sum, tmap] = await Promise.all([assignmentSummaries(rows), assignmentTargets(ids)]);
+    const out = rows.map((a) => {
+      const r = sum.get(a.id) || { total: 0, completed: 0, overdue: 0 };
+      return assignmentOut(a, { total: r.total, completed: r.completed, overdue: r.overdue, targets: (tmap.get(String(a.id)) || []).map(targetOut) });
+    });
     return { assignments: out, total: total.n, page, limit };
   });
 
@@ -80,6 +81,16 @@ export default async function assignmentRoutes(app) {
       const p = await one('SELECT * FROM playlists WHERE id::text = $1', [String(b.playlistId)]);
       if (!p) throw notFound('Плейлист не найден');
       if (p.owner_id !== req.user.id && !isStaff(req.user) && !['public', 'internal'].includes(p.visibility)) throw forbidden('Плейлист недоступен для назначения');
+      // Видео внутри плейлиста получают доступ по назначению, поэтому проверяем каждое:
+      // чужие приватные видео назначать нельзя (иначе назначение — обход доступа к ним)
+      if (!isStaff(req.user)) {
+        const hidden = await many(
+          `SELECT v.id, v.title FROM playlist_items pi JOIN videos v ON v.id = pi.video_id
+           WHERE pi.playlist_id = $1 AND v.deleted_at IS NULL AND v.owner_id <> $2 AND v.visibility NOT IN ('public','internal') LIMIT 5`,
+          [p.id, req.user.id],
+        );
+        if (hidden.length) throw forbidden(`В плейлисте есть чужие видео с ограниченным доступом (${hidden.map((x) => x.title).join(', ')}) — назначить его нельзя`);
+      }
       title = p.title;
     }
     const targets = Array.isArray(b.targets) ? b.targets.slice(0, 500) : [];

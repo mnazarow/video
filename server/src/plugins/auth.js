@@ -122,10 +122,13 @@ export default fp(async function authPlugin(app) {
   app.decorate('requireStaff', async function requireStaff(req) {
     if (!req.user) throw unauthorized();
     if (req.user.status !== 'active' || !['admin', 'moderator'].includes(req.user.role)) throw forbidden('Требуются права модератора');
+    if (req.session?.api && !(req.session.scopes || []).includes('admin')) throw forbidden('У этого API-токена нет доступа к администрированию (нужна область admin)');
   });
   app.decorate('requireAdmin', async function requireAdmin(req) {
     if (!req.user) throw unauthorized();
     if (req.user.status !== 'active' || req.user.role !== 'admin') throw forbidden('Требуются права администратора');
+    // API-токен работает в администрировании только с областью admin (по умолчанию её нет)
+    if (req.session?.api && !(req.session.scopes || []).includes('admin')) throw forbidden('У этого API-токена нет доступа к администрированию (нужна область admin)');
     // 1.3: обязательная двухфакторная защита для администраторов (кроме входа по API-токену)
     if (req.settings?.['security.require_totp_admins'] && !req.user.totp_enabled && !req.session?.api) {
       const err = forbidden('Для администраторов обязательна двухфакторная защита: включите её в настройках профиля (Безопасность)');

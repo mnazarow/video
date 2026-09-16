@@ -78,9 +78,11 @@ export default async function liveRoutes(app) {
     const s = await loadStream(req.params.id);
     if (!s) throw notFound();
     if (!canViewLive(s, req.user)) throw req.user ? forbidden() : unauthorized();
-    const file = String(req.params['*'] || 'index.m3u8').replace(/\.\./g, '');
+    // Только имена файлов плейлиста/сегментов: закодированные «..» (%252e) раньше проходили фильтр
+    const file = String(req.params['*'] || 'index.m3u8');
+    if (file.includes('..') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,120}){0,2}$/.test(file)) throw notFound();
     const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-    const target = `${config.mediamtx.hlsUrl}/live/${s.stream_key}/${file}${qs}`;
+    const target = `${config.mediamtx.hlsUrl}/live/${encodeURIComponent(s.stream_key)}/${file}${qs}`;
     let res;
     try {
       res = await fetch(target, { headers: { 'user-agent': 'corpvideo-proxy' } });
@@ -202,7 +204,7 @@ export default async function liveRoutes(app) {
   app.post('/studio/live/:id/reset-key', { preHandler: app.requireActive }, async (req) => {
     const s = await loadStream(req.params.id);
     if (!s) throw notFound();
-    if (s.owner_id !== req.user.id && !isStaff(req.user)) throw forbidden();
+    if (s.owner_id !== req.user.id && req.user.role !== 'admin') throw forbidden('Сменить ключ может владелец трансляции или администратор');
     if (s.status === 'live') throw badRequest('Нельзя сменить ключ во время эфира');
     const upd = await one('UPDATE live_streams SET stream_key = $2, updated_at = now() WHERE id = $1 RETURNING *', [s.id, randomToken(18)]);
     return { streamKey: upd.stream_key };
@@ -262,7 +264,7 @@ async function startStream(s, pathInfo) {
   const protocol = pathInfo?.source?.type ? String(pathInfo.source.type).replace(/Conn|Session/g, '').toLowerCase() : null;
   await query(`UPDATE live_streams SET status = 'live', started_at = now(), ended_at = NULL, source_protocol = $2, viewer_count = 0, updated_at = now() WHERE id = $1`, [s.id, protocol]);
   const full = await loadStream(s.id);
-  await publish({ type: 'live.started', streamId: s.id, shortId: s.short_id, ownerId: s.owner_id });
+  await publish({ type: 'live.started', streamId: s.id, shortId: s.short_id, ownerId: s.owner_id, visibility: s.visibility });
   await emitEvent('live.started', { stream: { id: s.id, shortId: s.short_id, title: s.title, ownerId: s.owner_id, visibility: s.visibility, protocol, url: `/live/${s.short_id}` } });
   await toChannel(`live:${s.id}`, { type: 'stream_status', streamId: s.id, status: 'live', stream: liveOut(full) });
   // уведомляем тех, кто просил напомнить (если напоминание ещё не отправлялось)
@@ -281,7 +283,7 @@ async function startStream(s, pathInfo) {
 
 async function endStream(s, reason = 'source_gone') {
   await query(`UPDATE live_streams SET status = 'ended', ended_at = now(), viewer_count = 0, updated_at = now() WHERE id = $1 AND status = 'live'`, [s.id]);
-  await publish({ type: 'live.ended', streamId: s.id, shortId: s.short_id, ownerId: s.owner_id });
+  await publish({ type: 'live.ended', streamId: s.id, shortId: s.short_id, ownerId: s.owner_id, visibility: s.visibility });
   await emitEvent('live.ended', { stream: { id: s.id, shortId: s.short_id, title: s.title, ownerId: s.owner_id, visibility: s.visibility, reason, url: `/live/${s.short_id}` } });
   await toChannel(`live:${s.id}`, { type: 'stream_status', streamId: s.id, status: 'ended', reason });
   if (s.record) {

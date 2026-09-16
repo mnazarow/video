@@ -53,7 +53,11 @@ export async function buildApp({ logger = true } = {}) {
   await app.register(rateLimit, {
     global: true, max: 1500, timeWindow: '1 minute',
     // Ограничение действует только на API; статика, медиа, HLS-прокси и проверки доступа не учитываются
-    allowList: (req) => !req.url.startsWith('/api/') || req.url.startsWith('/api/media/auth') || req.url.includes('/hls/'),
+    allowList: (req) => {
+      // Только путь: раньше учитывалась и query-строка, и любой запрос с «/hls/» в параметрах обходил лимит
+      const p = (req.url || '').split('?')[0];
+      return !p.startsWith('/api/') || p.startsWith('/api/media/auth') || p.includes('/hls/');
+    },
     keyGenerator: (req) => req.ip,
     errorResponseBuilder: () => ({ error: 'Слишком много запросов, попробуйте позже', statusCode: 429 }),
   });
@@ -133,13 +137,23 @@ export async function buildApp({ logger = true } = {}) {
         else res.setHeader('Cache-Control', 'no-cache');
       },
     });
+    // Список файлов статики строится один раз при старте (wildcard: false), поэтому пересобранный
+    // фронтенд без перезапуска API отдавал бы 404 на все новые файлы. Этот маршрут ищет файл на диске.
+    app.get('/assets/*', async (req, reply) => {
+      const rel = String(req.params['*'] || '');
+      const parts = rel.split('/');
+      if (!parts.length || parts.some((x) => !x || x === '.' || x === '..' || !/^[A-Za-z0-9._-]+$/.test(x))) return reply.code(404).send({ error: 'Not found' });
+      return reply.sendFile(path.posix.join('assets', rel));
+    });
   }
 
-  let indexCache = null;
+  let indexCache = null; let indexCacheMtime = 0;
   async function serveSpa(req, reply) {
     const file = path.join(dist, 'index.html');
     if (!fs.existsSync(file)) { reply.code(503).type('text/html').send('<h1>Веб-интерфейс не собран</h1><p>Выполните сборку: cd web && npm run build</p>'); return; }
-    if (!indexCache || config.isDev) indexCache = fs.readFileSync(file, 'utf8');
+    // Перечитываем index.html при изменении файла: после пересборки фронтенда старый кэш вёл бы на удалённые файлы
+    const mtime = fs.statSync(file).mtimeMs;
+    if (!indexCache || config.isDev || mtime !== indexCacheMtime) { indexCache = fs.readFileSync(file, 'utf8'); indexCacheMtime = mtime; }
     const s = await publicSettings();
     const meta = await pageMeta(req, s);
     const html = indexCache

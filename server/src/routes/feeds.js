@@ -1,13 +1,27 @@
 // RSS/Atom-ленты (как у каналов YouTube) и подкаст-ленты (аудиодорожка) для каналов, категорий,
 // плейлистов, тегов, новых видео и подписок. Личный токен ?ft=… даёт доступ к видео «для сотрудников».
+import fsp from 'node:fs/promises';
 import { one, many, query } from '../db.js';
 import { notFound, forbidden } from '../lib/util.js';
 import { listVisibilitySql } from '../lib/access.js';
 import { randomToken } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { feedTokenUser } from './media.js';
+import { storage } from '../lib/storage.js';
 
-const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// Символы, запрещённые в XML 1.0, и «одинокие» суррогаты ломают любой читатель лент — вычищаем до экранирования.
+const XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const esc = (s) => String(s ?? '').replace(XML_FORBIDDEN, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** Размер файла вложения: подкаст-клиентам нужен размер именно того файла, на который ведёт ссылка. */
+async function withEnclosureSizes(items, audio) {
+  await Promise.all((items || []).map(async (v) => {
+    const rel = audio ? (v.audio_path || v.mp4_path) : (v.mp4_path || v.audio_path);
+    if (!rel) return;
+    try { v.enclosure_size = (await fsp.stat(storage.abs(rel))).size; } catch { /* файл мог быть перенесён */ }
+  }));
+  return items;
+}
 const rfc822 = (d) => new Date(d || Date.now()).toUTCString();
 const iso = (d) => new Date(d || Date.now()).toISOString();
 const fmtDur = (sec) => { const s = Math.max(0, Math.round(Number(sec) || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`; };
@@ -22,7 +36,8 @@ function whereBase(user) {
 function mediaAbs(rel, ft) { return `${config.baseUrl}/media/${rel}${ft ? `?ft=${encodeURIComponent(ft)}` : ''}`; }
 
 function buildRss({ title, link, description, items, audio, ft, self, image }) {
-  const ns = audio ? ' xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/"' : ' xmlns:media="http://search.yahoo.com/mrss/" xmlns:atom="http://www.w3.org/2005/Atom"';
+  // xmlns:atom объявлен ниже в самом теге <rss>; повторное объявление здесь делало XML невалидным
+  const ns = audio ? ' xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/"' : ' xmlns:media="http://search.yahoo.com/mrss/"';
   let out = `<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"${ns} xmlns:atom="http://www.w3.org/2005/Atom">\n<channel>\n<title>${esc(title)}</title>\n<link>${esc(link)}</link>\n<description>${esc(description)}</description>\n<language>ru</language>\n<lastBuildDate>${rfc822(items[0]?.published_at)}</lastBuildDate>\n<atom:link href="${esc(self)}" rel="self" type="application/rss+xml"/>\n<generator>CorpVideo</generator>\n`;
   if (image) out += `<image><url>${esc(image)}</url><title>${esc(title)}</title><link>${esc(link)}</link></image>\n`;
   if (audio) out += `<itunes:author>${esc(title)}</itunes:author>\n<itunes:explicit>false</itunes:explicit>\n${image ? `<itunes:image href="${esc(image)}"/>\n` : ''}`;
@@ -31,7 +46,7 @@ function buildRss({ title, link, description, items, audio, ft, self, image }) {
     const enclosureRel = audio ? (v.audio_path || v.mp4_path) : (v.mp4_path || v.audio_path);
     const thumb = v.thumbnail_path ? mediaAbs(v.thumbnail_path, ft) : null;
     out += `<item>\n<title>${esc(v.title)}</title>\n<link>${esc(url)}</link>\n<guid isPermaLink="true">${esc(url)}</guid>\n<pubDate>${rfc822(v.published_at)}</pubDate>\n<author>${esc(v.owner_name)}</author>\n${v.category_name ? `<category>${esc(v.category_name)}</category>\n` : ''}<description>${esc((v.description || '').slice(0, 2000))}</description>\n`;
-    if (enclosureRel) out += `<enclosure url="${esc(mediaAbs(enclosureRel, ft))}" type="${enclosureRel.endsWith('.m4a') ? 'audio/mp4' : 'video/mp4'}" length="${Number(v.original_size) || 0}"/>\n`;
+    if (enclosureRel) out += `<enclosure url="${esc(mediaAbs(enclosureRel, ft))}" type="${enclosureRel.endsWith('.m4a') ? 'audio/mp4' : 'video/mp4'}" length="${Number(v.enclosure_size) || Number(v.original_size) || 0}"/>\n`;
     if (audio) out += `<itunes:duration>${fmtDur(v.duration)}</itunes:duration>\n<itunes:author>${esc(v.owner_name)}</itunes:author>\n${thumb ? `<itunes:image href="${esc(thumb)}"/>\n` : ''}`;
     else if (thumb) out += `<media:thumbnail url="${esc(thumb)}"/>\n<media:content url="${esc(url)}" medium="video" duration="${Math.round(Number(v.duration) || 0)}"/>\n`;
     out += `</item>\n`;
@@ -57,8 +72,9 @@ export default async function feedsRoutes(app) {
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || Number(req.settings['feeds.items']) || 30));
     return { user, limit, ft: user && req.query.ft ? String(req.query.ft) : null, audio: req.query.audio === '1' || req.query.podcast === '1', atom: req.query.format === 'atom' };
   }
-  function send(reply, req, c, { title, link, description, items, image }) {
+  async function send(reply, req, c, { title, link, description, items, image }) {
     const self = `${config.baseUrl}${req.raw.url}`;
+    if (!c.atom) await withEnclosureSizes(items, c.audio);
     const xml = c.atom ? buildAtom({ title, link, items, ft: c.ft, self }) : buildRss({ title, link, description, items, audio: c.audio, ft: c.ft, self, image });
     reply.header('Content-Type', `${c.atom ? 'application/atom+xml' : 'application/rss+xml'}; charset=utf-8`);
     reply.header('Cache-Control', 'private, max-age=300');

@@ -49,6 +49,7 @@ function addCard() {
 function addItem() {
   if (endScreen.value.items.length >= 4) return ui.toast('Не больше четырёх элементов', { type: 'error' });
   if (['video', 'playlist', 'url'].includes(newItem.value.type) && !newItem.value.target.trim()) return ui.toast('Укажите цель', { type: 'error' });
+  if (newItem.value.type === 'url' && !/^https?:\/\//i.test(newItem.value.target.trim())) return ui.toast('Ссылка должна начинаться с http(s)://', { type: 'error' });
   endScreen.value.items.push({ ...newItem.value });
   newItem.value = { type: 'video', target: '', title: '' };
 }

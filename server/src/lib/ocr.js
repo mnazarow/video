@@ -77,7 +77,7 @@ export async function runOcr(job, ctx = {}) {
     await runFfmpeg(['-i', src, '-vf', `fps=1/${interval},scale='min(1600,iw)':-2`, '-q:v', '3', path.join(dir, 'f%06d.jpg')], { duration, signal, label: 'ocr-frames', onProgress: (p) => heartbeat?.(Math.round(p * 0.3), 'frames').catch(() => {}) });
     const files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.jpg')).sort();
     const rows = [];
-    let prev = '';
+    let prev = ''; let failed = 0;
     for (let i = 0; i < files.length; i++) {
       if (signal?.aborted) throw new Error('Задание отменено');
       const t = i * interval;
@@ -85,10 +85,12 @@ export async function runOcr(job, ctx = {}) {
       try {
         const { stdout } = await execFileP(TESSERACT, [path.join(dir, files[i]), 'stdout', '-l', langs, '--psm', '3'], { maxBuffer: 4 * 1024 * 1024, env: { ...process.env, OMP_THREAD_LIMIT: '2' } });
         text = cleanOcrText(stdout);
-      } catch (e) { log?.warn({ err: e.message, frame: files[i] }, 'ocr frame failed'); }
+      } catch (e) { failed++; log?.warn({ err: e.message, frame: files[i] }, 'ocr frame failed'); }
       if (text && textSimilarity(text, prev) < 0.85) { rows.push({ t, text }); prev = text; }
       if (i % 5 === 0) await heartbeat?.(30 + Math.round(((i + 1) / files.length) * 65), 'ocr').catch(() => {});
     }
+    // Все кадры упали (нет языкового пакета, нет прав) — это ошибка задания, а не «пустой» результат
+    if (files.length && failed === files.length) throw Object.assign(new Error(`Не удалось распознать ни один кадр (${failed} шт.) — проверьте установку tesseract и языковые пакеты`), { noRetry: true });
     await query('DELETE FROM video_screen_text WHERE video_id = $1', [video.id]);
     for (const r of rows) await query('INSERT INTO video_screen_text(video_id, t, text) VALUES ($1,$2,$3)', [video.id, r.t, r.text]);
     // Сводный текст для поиска: уникальные строки

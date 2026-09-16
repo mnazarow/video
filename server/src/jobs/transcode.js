@@ -123,7 +123,9 @@ export async function runTranscode(job, ctx) {
   // 6. Автосубтитры — до возможного удаления оригинала
   const current = await one('SELECT * FROM videos WHERE id = $1', [video.id]);
   if (s['asr.enabled'] && s['asr.auto_generate'] && !current.is_live_recording) {
-    const hasAuto = await one(`SELECT 1 FROM subtitles WHERE video_id = $1 AND kind = 'auto'`, [video.id]);
+    // Субтитры, помеченные «(устарели)» при замене файла, не считаем готовыми — иначе после замены
+    // или монтажа расшифровка навсегда осталась бы от предыдущей версии видео
+    const hasAuto = await one(`SELECT 1 FROM subtitles WHERE video_id = $1 AND kind = 'auto' AND label NOT LIKE '%(устарели)%'`, [video.id]);
     if (!hasAuto) await enqueue('subtitles_asr', { videoId: video.id, language: s['asr.language'] }, { videoId: video.id, priority: -1 });
   }
 

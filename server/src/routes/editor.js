@@ -1,10 +1,10 @@
 // Редактор видео (обрезка, вырезание, удаление пауз), клипы как отдельные видео, перевод субтитров,
 // текст на экране (OCR) и повтор чата для записей эфиров.
-import { one, many, query } from '../db.js';
+import { one, many, query, withLock } from '../db.js';
 import { badRequest, forbidden, notFound } from '../lib/util.js';
 import { enqueue } from '../lib/jobs.js';
 import { audit } from '../lib/audit.js';
-import { canUpload, canEditVideo, listVisibilitySql } from '../lib/access.js';
+import { canUpload, canEditVideo, listVisibilitySql, canViewVideo } from '../lib/access.js';
 import { videoCard } from '../lib/serialize.js';
 import { requireEditable, requireViewable } from './videos.js';
 import { screenTextOf, ocrAvailable } from '../lib/ocr.js';
@@ -21,6 +21,31 @@ function num(v, name, { min = 0, max = Infinity } = {}) {
   const n = Number(v);
   if (!Number.isFinite(n) || n < min || n > max) throw badRequest(`Некорректное значение: ${name}`);
   return n;
+}
+
+// Разрушающие операции (меняют файл видео). Два таких задания одновременно перезаписали бы работу друг друга.
+const DESTRUCTIVE_SQL = `(j.type = 'video_edit' OR (j.type = 'remove_silence' AND j.payload->>'apply' = 'true'))`;
+
+/**
+ * Поставить разрушающее задание, только если другого такого нет.
+ * Проверка и вставка идут под межпроцессной блокировкой: два одновременных запроса
+ * (двойной клик, повтор) иначе создали бы два монтажа, которые перезапишут файл друг друга.
+ */
+async function enqueueExclusiveEdit(videoId, type, payload, opts = {}) {
+  const res = await withLock(`corpvideo:video-edit:${videoId}`, async () => {
+    const busy = await one(`SELECT j.id FROM jobs j WHERE j.video_id = $1 AND j.status IN ('queued','running') AND ${DESTRUCTIVE_SQL} ORDER BY j.id LIMIT 1`, [videoId]);
+    if (busy) return { busy: Number(busy.id) };
+    return { job: await enqueue(type, payload, { videoId, priority: 1, maxAttempts: 1, dedupe: false, ...opts }) };
+  });
+  if (!res.ok) throw badRequest('Над этим видео уже выполняется операция — повторите через несколько секунд');
+  if (res.value.busy) throw badRequest('Над этим видео уже выполняется монтаж — дождитесь его завершения (задание №' + res.value.busy + ')');
+  return res.value.job;
+}
+
+/** Клипы читают исходный файл, поэтому во время монтажа их создавать нельзя. */
+async function ensureNoActiveEdit(videoId) {
+  const busy = await one(`SELECT j.id FROM jobs j WHERE j.video_id = $1 AND j.status IN ('queued','running') AND ${DESTRUCTIVE_SQL} ORDER BY j.id LIMIT 1`, [videoId]);
+  if (busy) throw badRequest('Над этим видео уже выполняется монтаж — дождитесь его завершения (задание №' + Number(busy.id) + ')');
 }
 
 async function ensureEditable(req, id) {
@@ -62,7 +87,7 @@ export default async function editorRoutes(app) {
     const end = num(req.body?.end ?? duration, 'end', { min: 0, max: duration + 0.5 });
     if (end - start < 1) throw badRequest('Оставшаяся часть короче 1 секунды');
     if (start < 0.05 && end >= duration - 0.05) throw badRequest('Границы совпадают с началом и концом видео — нечего обрезать');
-    const j = await enqueue('video_edit', { videoId: v.id, keep: [{ start, end }], byUserId: req.user.id, op: 'trim' }, { videoId: v.id, priority: 1, maxAttempts: 1 });
+    const j = await enqueueExclusiveEdit(v.id, 'video_edit', { videoId: v.id, keep: [{ start, end }], byUserId: req.user.id, op: 'trim' });
     await audit(req, 'video.edit', { targetType: 'video', targetId: v.id, details: { op: 'trim', start, end } });
     return { ok: true, jobId: Number(j.id) };
   });
@@ -70,11 +95,13 @@ export default async function editorRoutes(app) {
   app.post('/videos/:id/editor/cut', { preHandler: app.requireActive }, async (req) => {
     const v = await ensureEditable(req, req.params.id);
     const duration = Number(v.duration) || 0;
-    const cuts = normalizeSegments((Array.isArray(req.body?.cuts) ? req.body.cuts : []).slice(0, 100).map((c) => ({ start: num(c.start, 'start', { min: 0, max: duration }), end: num(c.end, 'end', { min: 0, max: duration + 0.5 }) })), duration);
+    const raw = (Array.isArray(req.body?.cuts) ? req.body.cuts : []).slice(0, 100);
+    if (raw.some((c) => !c || typeof c !== 'object' || Array.isArray(c))) throw badRequest('Каждый фрагмент должен быть объектом {start, end}');
+    const cuts = normalizeSegments(raw.map((c) => ({ start: num(c.start, 'start', { min: 0, max: duration }), end: num(c.end, 'end', { min: 0, max: duration + 0.5 }) })), duration);
     if (!cuts.length) throw badRequest('Укажите хотя бы один фрагмент для вырезания');
     const keep = invertCuts(cuts, duration);
     if (!keep.length) throw badRequest('После вырезания не остаётся ни одного фрагмента');
-    const j = await enqueue('video_edit', { videoId: v.id, cuts, byUserId: req.user.id, op: 'cut' }, { videoId: v.id, priority: 1, maxAttempts: 1 });
+    const j = await enqueueExclusiveEdit(v.id, 'video_edit', { videoId: v.id, cuts, byUserId: req.user.id, op: 'cut' });
     await audit(req, 'video.edit', { targetType: 'video', targetId: v.id, details: { op: 'cut', cuts } });
     return { ok: true, jobId: Number(j.id), keep };
   });
@@ -89,7 +116,10 @@ export default async function editorRoutes(app) {
       minSec: b.minSec !== undefined ? num(b.minSec, 'minSec', { min: 0.3, max: 30 }) : undefined,
       keepSec: b.keepSec !== undefined ? num(b.keepSec, 'keepSec', { min: 0, max: 5 }) : undefined,
     };
-    const j = await enqueue('remove_silence', payload, { videoId: v.id, priority: 1, maxAttempts: 1, dedupe: false });
+    // Поиск пауз (apply=false) схлопываем по dedupe — иначе один пользователь набьёт очередь тяжёлыми заданиями
+    const j = payload.apply
+      ? await enqueueExclusiveEdit(v.id, 'remove_silence', payload)
+      : await enqueue('remove_silence', payload, { videoId: v.id, priority: 1, maxAttempts: 1, dedupe: true });
     await audit(req, 'video.edit', { targetType: 'video', targetId: v.id, details: { op: b.apply ? 'remove_silence' : 'detect_silence' } });
     return { ok: true, jobId: Number(j.id) };
   });
@@ -106,6 +136,13 @@ export default async function editorRoutes(app) {
     if (end - start < 1) throw badRequest('Клип должен быть не короче 1 секунды');
     if (end - start > 3600) throw badRequest('Клип не может быть длиннее часа');
     const editable = canEditVideo(v, req.user);
+    // Клип — это копия исходного материала: по временной ссылке-приглашению и в обход запрета
+    // на скачивание его создавать нельзя, иначе ограничения автора обходятся одним запросом.
+    if (!editable) {
+      if (!(await canViewVideo(v, req.user, null))) throw forbidden('Клип можно создать только из видео, к которому у вас есть постоянный доступ');
+      if (!v.allow_download) throw forbidden('Автор запретил скачивание этого видео — создание клипов из него недоступно');
+    }
+    await ensureNoActiveEdit(v.id);
     const visibility = ['public', 'internal', 'unlisted', 'private'].includes(req.body?.visibility) ? req.body.visibility : 'private';
     // Клип чужого видео не может быть доступнее исходника (public > internal > unlisted > private)
     const rank = { public: 3, internal: 2, unlisted: 1, private: 0 };

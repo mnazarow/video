@@ -88,8 +88,26 @@ random_secret() {
 random_password() { random_secret 20; }
 
 # Подстановка ${VAR} для перечисленных переменных (безопасно для nginx с его $var)
+# Проверка целостности дистрибутива: частая причина сбоя — файл, потерянный при копировании или в git
+check_distribution() {
+  local root="$1" missing=() f
+  for f in VERSION server/package.json web/package.json docker-compose.yml \
+           deploy/mediamtx/mediamtx.yml.template deploy/nginx/site.conf.template deploy/nginx/locations.conf.template \
+           deploy/docker/Dockerfile deploy/docker/nginx-entrypoint.sh server/src/index.js server/src/worker.js; do
+    [ -e "$root/$f" ] || missing+=("$f")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo >&2
+    echo "В дистрибутиве нет обязательных файлов:" >&2
+    printf '   - %s\n' "${missing[@]}" >&2
+    die "Распакуйте архив CorpVideo заново (или выполните git pull) и повторите установку"
+  fi
+}
+
 render_template() {
   local src="$1" dst="$2"; shift 2
+  [ -f "$src" ] || die "Не найден файл шаблона $src. Дистрибутив неполный — распакуйте архив CorpVideo заново (или выполните git pull) и повторите установку"
+
   local -a args=()
   local v val
   for v in "$@"; do

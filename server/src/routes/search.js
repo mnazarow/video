@@ -2,7 +2,7 @@
 import { one, many, query } from '../db.js';
 import { listVisibilitySql, isActive } from '../lib/access.js';
 import { videoCard, userPublic, playlistOut, liveOut } from '../lib/serialize.js';
-import { paging, forbidden } from '../lib/util.js';
+import { paging, forbidden, safeHeadline } from '../lib/util.js';
 import { VIDEO_SELECT, VIDEO_FROM } from './videos.js';
 
 function dateFilter(d) {
@@ -71,7 +71,7 @@ export default async function searchRoutes(app) {
     if (req.query.category) { params.push(String(req.query.category)); where.push(`c.slug = $${params.length}`); }
     if (req.query.channel) { params.push(String(req.query.channel).replace(/^@/, '')); where.push(`u.handle = $${params.length}`); }
     if (req.query.subtitles === '1') where.push(`EXISTS(SELECT 1 FROM subtitles st WHERE st.video_id = v.id AND st.status = 'ready')`);
-    if (req.query.hd === '1') where.push('v.height >= 720 OR v.width >= 720');
+    if (req.query.hd === '1') where.push('(v.height >= 720 OR v.width >= 720)');
     const sort = { date: 'v.published_at DESC', views: 'v.view_count DESC', rating: '(v.like_count - v.dislike_count) DESC, v.view_count DESC', relevance: `${rank} DESC, v.view_count DESC` }[req.query.sort] || (q ? `${rank} DESC, v.published_at DESC` : 'v.published_at DESC');
     params.push(limit, offset);
     const rows = await many(
@@ -81,7 +81,10 @@ export default async function searchRoutes(app) {
       params,
     );
     const total = await one(`SELECT count(*)::int AS n FROM ${VIDEO_FROM} WHERE ${where.join(' AND ')}`, params.slice(0, params.length - 2));
-    out.videos = rows.map((r) => videoCard(r, { transcriptHit: q && r.transcript_hit && /<b>/.test(r.transcript_hit) ? r.transcript_hit : undefined, screenTextHit: q && r.screen_hit && /<b>/.test(r.screen_hit) ? r.screen_hit : undefined }));
+    out.videos = rows.map((r) => videoCard(r, {
+      transcriptHit: q && r.transcript_hit && /<b>/.test(r.transcript_hit) ? safeHeadline(r.transcript_hit) : undefined,
+      screenTextHit: q && r.screen_hit && /<b>/.test(r.screen_hit) ? safeHeadline(r.screen_hit) : undefined,
+    }));
     out.total = total.n;
     return out;
   });

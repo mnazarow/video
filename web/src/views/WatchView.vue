@@ -135,7 +135,7 @@ watch(clipEnd, (e) => { clearInterval(clipTimer); clipDone.value = false; if (e)
 function onQuizPassed() { if (video.value?.viewer?.assignment) video.value.viewer.assignment.quizPassed = true; ui.toast('Тест сдан', { type: 'success' }); load(); }
 // --- 1.2: вложения, контроль присутствия, календарь --------------------------------------------
 const attachments = ref([]);
-async function loadAttachments() { try { attachments.value = (await get(`/api/videos/${video.value.shortId}/attachments`)).attachments; } catch { attachments.value = []; } }
+async function loadAttachments(seq = loadSeq) { try { const r = await get(`/api/videos/${video.value.shortId}/attachments`); if (isCurrentLoad(seq)) attachments.value = r.attachments; } catch { if (isCurrentLoad(seq)) attachments.value = []; } }
 const attention = ref({ visible: false, watched: 0 });
 let attentionTimer = null;
 function tickAttention() {
@@ -158,14 +158,16 @@ const screenOpen = ref(false);
 const chatReplayOpen = ref(false);
 const clips = ref([]);
 const audioOnly = ref(false);
-async function loadClips() { try { clips.value = (await get(`/api/videos/${video.value.shortId}/clips`)).clips; } catch { clips.value = []; } }
-function queueThis() { if (ui.queueAdd(video.value)) ui.toast('Добавлено в очередь', { type: 'success' }); else ui.toast('Уже в очереди'); }
+async function loadClips(seq = loadSeq) { try { const r = await get(`/api/videos/${video.value.shortId}/clips`); if (isCurrentLoad(seq)) clips.value = r.clips; } catch { if (isCurrentLoad(seq)) clips.value = []; } }
+function queueThis() { if (!video.value) return; if (ui.queueAdd(video.value)) ui.toast('Добавлено в очередь', { type: 'success' }); else ui.toast('Уже в очереди'); }
 function playQueued(q) { ui.queueRemove(q.id); router.push({ name: 'watch', params: { id: q.shortId } }); }
 const ATT_ICONS = { pdf: 'doc', doc: 'doc', docx: 'doc', xls: 'csv', xlsx: 'csv', csv: 'csv', ppt: 'image', pptx: 'image', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', svg: 'image', zip: 'inventory', '7z': 'inventory' };
 
 const theater = computed(() => ui.theater);
 const nextVideo = computed(() => {
-  if (ui.queue.length) return { ...ui.queue[0], fromQueue: true };
+  // Текущее видео в очереди пропускаем: иначе после его окончания оно же и запустится заново
+  const queued = ui.queue.find((x) => x.id !== video.value?.id);
+  if (queued) return { ...queued, fromQueue: true };
   if (playlist.value) {
     const idx = playlist.value.videos.findIndex((v) => v.id === video.value?.id);
     const next = playlist.value.videos.slice(idx + 1).find((v) => !v.unavailable);
@@ -192,27 +194,34 @@ function detectSource() {
   return 'direct';
 }
 
+let loadSeq = 0;
+/** Актуальна ли загрузка: при быстром переходе между видео ответы приходят вразнобой. */
+const isCurrentLoad = (seq) => seq === loadSeq;
 async function load() {
+  const seq = ++loadSeq;
   loading.value = true; error.value = null; endScreen.value = false; clearInterval(countdownTimer); ended.value = false;
   descExpanded.value = false;
   try {
     const r = await get(`/api/videos/${route.params.id}`);
+    if (!isCurrentLoad(seq)) return;
     video.value = r.video;
+    ui.queueRemove(r.video.id); // открытое видео из очереди уходит — как «сейчас играет» у YouTube
     document.title = `${r.video.title} — ${auth.siteName}`;
     const t = Number(route.query.t);
     if (ui.miniPlayer?.returning && ui.miniPlayer.video?.id === r.video.id) { startAt.value = ui.miniPlayer.position; ui.closeMini(); }
     else startAt.value = Number.isFinite(t) && t > 0 ? t : (r.video.viewer?.position && r.video.viewer.position > 5 ? r.video.viewer.position : 0);
     source.value = detectSource();
-    get(`/api/videos/${r.video.shortId}/related?limit=20`).then((x) => { related.value = x.videos; }).catch(() => {});
-    loadAttachments(); loadClips();
+    get(`/api/videos/${r.video.shortId}/related?limit=20`).then((x) => { if (isCurrentLoad(seq)) related.value = x.videos; }).catch(() => {});
+    loadAttachments(seq); loadClips(seq);
     screenOpen.value = route.query.panel === 'screen' && !!r.video.hasScreenText;
     chatReplayOpen.value = route.query.panel === 'chat' && !!r.video.hasChatReplay;
-    if (route.query.list) get(`/api/playlists/${route.query.list}?limit=200`).then((p) => { playlist.value = p; }).catch(() => { playlist.value = null; });
+    if (route.query.list) get(`/api/playlists/${route.query.list}?limit=200`).then((p) => { if (isCurrentLoad(seq)) playlist.value = p; }).catch(() => { if (isCurrentLoad(seq)) playlist.value = null; });
     else playlist.value = null;
   } catch (e) {
+    if (!isCurrentLoad(seq)) return;
     error.value = e;
     document.title = auth.siteName;
-  } finally { loading.value = false; }
+  } finally { if (isCurrentLoad(seq)) loading.value = false; }
 }
 
 async function onProgress(p) {

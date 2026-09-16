@@ -69,6 +69,25 @@ export async function tx(fn) {
 }
 
 /** Шина событий на LISTEN/NOTIFY (между API и воркерами). */
+/**
+ * Выполнить fn под межпроцессной блокировкой PostgreSQL (advisory lock).
+ * Блокировка удерживается на выделенном соединении всё время работы fn.
+ * Возвращает { ok:false } без выполнения, если блокировку уже держит другой воркер.
+ */
+export async function withLock(key, fn) {
+  const client = await pool.connect();
+  let held = false;
+  try {
+    const r = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS ok', [String(key)]);
+    held = !!r.rows[0]?.ok;
+    if (!held) return { ok: false };
+    return { ok: true, value: await fn() };
+  } finally {
+    if (held) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [String(key)]).catch(() => {});
+    client.release();
+  }
+}
+
 export const bus = new EventEmitter();
 bus.setMaxListeners(1000);
 let listenClient = null;

@@ -24,16 +24,20 @@ export async function runSubtitlesAsr(job, ctx) {
   const language = job.payload.language || s['asr.language'] || 'ru';
 
   // Запись субтитров со статусом processing
+  const autoLabel = `${LANG_LABELS[language] || language} (авто)`;
   let sub = job.payload.subtitleId ? await one('SELECT * FROM subtitles WHERE id = $1', [job.payload.subtitleId]) : null;
+  // Переиспользуем прежнюю автодорожку этого языка (в т. ч. помеченную «(устарели)» после замены файла),
+  // иначе в плеере появлялись бы две одинаковые дорожки
+  if (!sub) sub = await one(`SELECT * FROM subtitles WHERE video_id = $1 AND language = $2 AND kind = 'auto' AND translated_from IS NULL ORDER BY created_at LIMIT 1`, [video.id, language]);
   if (!sub) {
     sub = await one(
-      `INSERT INTO subtitles(video_id, language, label, kind, status) VALUES ($1,$2,$3,'auto','processing')
-       ON CONFLICT DO NOTHING RETURNING *`,
-      [video.id, language, `${LANG_LABELS[language] || language} (авто)`],
+      `INSERT INTO subtitles(video_id, language, label, kind, status) VALUES ($1,$2,$3,'auto','processing') RETURNING *`,
+      [video.id, language, autoLabel],
     );
   } else {
-    await query(`UPDATE subtitles SET status = 'processing', error = NULL WHERE id = $1`, [sub.id]);
+    await query(`UPDATE subtitles SET status = 'processing', error = NULL, label = $2 WHERE id = $1`, [sub.id, autoLabel]);
   }
+  if (!sub) throw new Error('Не удалось создать запись субтитров');
   await publish({ type: 'video.subtitles', videoId: video.id, ownerId: video.owner_id, status: 'processing' });
 
   // Источник аудио: оригинал → mp4 → HLS

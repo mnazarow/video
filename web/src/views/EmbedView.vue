@@ -17,10 +17,18 @@ const autoplay = route.query.autoplay === '1';
 const api = route.query.api === '1' || route.query.scorm === '1';
 let lastTime = -1; let lastProgressAt = 0; let maxPos = 0;
 
+// Адрес встраивающей страницы: сообщения шлём именно ей, а не всем подряд ('*')
+const parentOrigin = (() => {
+  try {
+    if (!document.referrer) return '*';
+    const u = new URL(document.referrer);
+    return /^https?:$/.test(u.protocol) ? u.origin : '*'; // file:// даёт origin "null" — postMessage с ним падает
+  } catch { return '*'; }
+})();
 function send(event, extra = {}) {
   if (!api || window.parent === window) return;
   const v = video.value;
-  try { window.parent.postMessage({ source: 'corpvideo', event, videoId: v?.id, shortId: v?.shortId, title: v?.title, duration: v?.duration, ...extra }, '*'); } catch { /* ignore */ }
+  try { window.parent.postMessage({ source: 'corpvideo', event, videoId: v?.id, shortId: v?.shortId, title: v?.title, duration: v?.duration, ...extra }, parentOrigin); } catch { /* ignore */ }
 }
 function stateOf(position) {
   const pos = Number.isFinite(position) ? position : (player.value?.currentTime() || 0);
@@ -37,6 +45,9 @@ function onTime(t) {
   if (Date.now() - lastProgressAt > 5000) { lastProgressAt = Date.now(); send('progress', stateOf(t)); }
 }
 function onMessage(e) {
+  // Управлять плеером может только встраивающая страница (не соседний фрейм и не всплывающее окно)
+  if (e.source !== window.parent) return;
+  if (parentOrigin !== '*' && e.origin !== parentOrigin) return;
   const m = e.data || {};
   if (m.source !== 'corpvideo-host' || !player.value) return;
   const el = player.value.el?.();

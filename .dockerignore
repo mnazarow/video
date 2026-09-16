@@ -6,7 +6,7 @@ web/dist
 server/data
 server/.env
 .env
-mediamtx/
+/mediamtx/
 deploy/mediamtx/mediamtx.yml
 docs/
 *.log

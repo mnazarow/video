@@ -47,7 +47,14 @@ export const config = {
   host: env('HOST', '127.0.0.1'),
   port: int('PORT', 3000),
   baseUrl: env('BASE_URL', 'http://localhost:3000').replace(/\/+$/, ''),
-  trustProxy: bool('TRUST_PROXY', true),
+  // Число = сколько ближайших прокси доверять (nginx). true/false и список адресов тоже принимаются.
+  trustProxy: (() => {
+    const raw = (process.env.TRUST_PROXY ?? '1').trim();
+    if (raw === '' || raw === '1' || raw === 'true') return 1;
+    if (raw === '0' || raw === 'false') return false;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    return raw; // список адресов/CIDR
+  })(),
   logLevel: env('LOG_LEVEL', 'info'),
   secretKey: env('SECRET_KEY', ''),
   databaseUrl: env('DATABASE_URL', 'postgres://corpvideo:corpvideo@127.0.0.1:5432/corpvideo'),

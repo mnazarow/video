@@ -97,6 +97,10 @@ export async function finalizeFile({ video, srcPath, filename, replace = false, 
     );
     // старые автосубтитры больше не соответствуют новому файлу — помечаем
     await query(`UPDATE subtitles SET label = CASE WHEN label LIKE '%(устарели)%' THEN label ELSE label || ' (устарели)' END WHERE video_id = $1 AND kind = 'auto'`, [video.id]);
+    // распознанный текст с экрана и расшифровка речи привязаны к таймкодам старого файла —
+    // сбрасываем, иначе поиск и ИИ продолжат работать по содержимому предыдущей версии
+    await query('DELETE FROM video_screen_text WHERE video_id = $1', [video.id]);
+    await query(`UPDATE videos SET screen_text = NULL, ocr_status = NULL, ocr_at = NULL, transcript = NULL WHERE id = $1`, [video.id]);
   } else {
     await query(`UPDATE videos SET status = 'queued', original_path = $2, original_size = $3, original_kept = true WHERE id = $1`, [video.id, storage.rel(dest), st.size]);
   }

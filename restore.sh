@@ -19,7 +19,11 @@ while [ $# -gt 0 ]; do case "$1" in --yes|-y) CV_YES=1; shift ;; -h|--help) sed 
 [ -n "$SRC" ] || { sed -n '2,8p' "$0"; exit 2; }
 if [ -d "$SRC" ]; then DUMP="$SRC/db.dump"; MEDIA_TAR="$SRC/media.tar"; else DUMP="$SRC"; MEDIA_TAR=""; fi
 [ -f "$DUMP" ] || die "Не найден дамп базы: $DUMP"
+[ -s "$DUMP" ] || die "Файл дампа пуст: $DUMP — эта копия непригодна, возьмите другую"
 step "Восстановление из $SRC"
+# Проверяем дамп ДО удаления базы: иначе при испорченном файле портал остался бы без данных
+if [ "$MODE" = "docker" ]; then (cd "$APP_DIR" && docker compose exec -T db pg_restore -l >/dev/null 2>>"$CV_LOG" < "$DUMP") || die "Файл не является дампом PostgreSQL или повреждён: $DUMP"
+else su - postgres -c "pg_restore -l" >/dev/null 2>>"$CV_LOG" < "$DUMP" || die "Файл не является дампом PostgreSQL или повреждён: $DUMP"; fi
 warn "Текущая база данных будет ЗАМЕНЕНА содержимым копии."
 confirm "Продолжить?" || exit 0
 if [ "$MODE" = "docker" ]; then
@@ -38,4 +42,8 @@ else
   if [ -n "$MEDIA_TAR" ] && [ -f "$MEDIA_TAR" ]; then info "Восстановление медиафайлов…"; tar -xf "$MEDIA_TAR" -C "$DATA_DIR"; chown -R corpvideo:corpvideo "$DATA_DIR/media"; fi
   systemctl start corpvideo-api corpvideo-worker
 fi
-ok "Восстановление завершено"
+# Убеждаемся, что база действительно восстановлена: предупреждения pg_restore не должны скрывать пустую базу
+if [ "$MODE" = "docker" ]; then tables="$(cd "$APP_DIR" && docker compose exec -T db psql -U corpvideo -d corpvideo -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'" 2>/dev/null | tr -d '[:space:]')"
+else tables="$(su - postgres -c "psql -d corpvideo -tAc \"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'\"" 2>/dev/null | tr -d '[:space:]')"; fi
+[ "${tables:-0}" -ge 10 ] 2>/dev/null || die "База после восстановления выглядит пустой (таблиц: ${tables:-0}). Подробности: $CV_LOG"
+ok "Восстановление завершено (таблиц в базе: $tables)"

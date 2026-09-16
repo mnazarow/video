@@ -1,6 +1,6 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import { get, patch, post, del, uploadFile } from '../../api.js';
 import { useAuth } from '../../stores/auth.js';
 import { useUi } from '../../stores/ui.js';
@@ -11,6 +11,7 @@ import BarList from '../../components/charts/BarList.vue';
 import RetentionChart from '../../components/charts/RetentionChart.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import ChannelAvatar from '../../components/ChannelAvatar.vue';
+import { copyWithToast } from '../../utils/clipboard.js';
 import QuizEditor from '../../components/studio/QuizEditor.vue';
 import ShareLinks from '../../components/studio/ShareLinks.vue';
 import AiAssistant from '../../components/studio/AiAssistant.vue';
@@ -37,17 +38,21 @@ const TABS = [['details', 'Сведения', 'edit'], ['thumbnail', 'Миниа
 const SOURCES = { home: 'Главная', search: 'Поиск', subscriptions: 'Подписки', channel: 'Канал', playlist: 'Плейлист', related: 'Похожие', direct: 'Прямая ссылка', embed: 'Встраивание', notification: 'Уведомление', trending: 'Тренды', library: 'Библиотека', external: 'Внешние сайты', share: 'Поделиться' };
 const DEVICES = { desktop: 'Компьютер', mobile: 'Телефон', tablet: 'Планшет', tv: 'ТВ' };
 let off = [];
+// Пока форма заполняется данными с сервера, отметку «есть изменения» не ставим
+let formFilling = false;
 
 async function load() {
   try {
     video.value = (await get(`/api/videos/${route.params.id}`)).video;
+    formFilling = true;
     const v = video.value;
     form.value = { title: v.title, description: v.description, categoryId: v.categoryId || '', tags: (v.tags || []).join(', '), visibility: v.visibility, commentsMode: v.commentsMode, allowDownload: v.allowDownload, allowEmbed: v.allowEmbed, allowRatings: v.allowRatings, scheduledAt: toLocalInput(v.scheduledAt), language: v.language || 'ru', viewerWatermark: !!v.viewerWatermark, expiresAt: toLocalInput(v.expiresAt) };
     chapters.value = (v.chapters || []).map((c) => ({ ...c }));
     accessUsers.value = v.accessUsers || [];
     accessGroups.value = v.accessGroups || [];
+    await nextTick();
     dirty.value = false;
-  } catch (e) { error.value = e; }
+  } catch (e) { error.value = e; } finally { formFilling = false; }
 }
 onMounted(async () => {
   categories.value = (await get('/api/feed/categories')).categories;
@@ -61,7 +66,21 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => off.forEach((f) => f()));
 watch(() => route.params.id, load);
-watch(form, () => { dirty.value = true; }, { deep: true });
+watch(form, () => { if (!formFilling) dirty.value = true; }, { deep: true });
+
+// Не теряем несохранённые сведения при уходе со страницы (переключение вкладок того же видео — не уход)
+function warnUnsaved(e) { if (dirty.value) { e.preventDefault(); e.returnValue = ''; } }
+window.addEventListener('beforeunload', warnUnsaved);
+onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved));
+async function confirmLeave(to, from) {
+  // Смена вкладки того же видео — не уход со страницы
+  if (!dirty.value || to.params.id === from.params.id) return true;
+  return ui.ask({ title: 'Уйти без сохранения?', message: 'Изменения в сведениях о видео не сохранены.', okLabel: 'Уйти', danger: true });
+}
+onBeforeRouteLeave(confirmLeave);
+// Переход на другое видео остаётся в той же записи маршрута (/studio/videos/:id/:tab?),
+// поэтому onBeforeRouteLeave там не срабатывает — нужен именно onBeforeRouteUpdate
+onBeforeRouteUpdate(confirmLeave);
 
 async function save(extra = {}) {
   saving.value = true;
@@ -155,7 +174,7 @@ const analytics = ref(null); const range = ref('28d');
 async function loadAnalytics() { analytics.value = (await get(`/api/videos/${video.value.id}/analytics?range=${range.value}`)).analytics; }
 watch(range, loadAnalytics);
 const shareUrl = computed(() => `${window.location.origin}/watch/${video.value?.shortId}`);
-function copy(t) { navigator.clipboard.writeText(t); ui.toast('Скопировано'); }
+async function copy(t) { await copyWithToast(ui, t); }
 </script>
 
 <template>

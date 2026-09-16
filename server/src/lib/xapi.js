@@ -73,7 +73,8 @@ export async function sendXapi(job) {
   try {
     const res = await fetch(statementsUrl(s), { method: 'POST', headers: authHeaders(s), body: JSON.stringify(row.statement), signal: ctrl.signal });
     const text = (await res.text().catch(() => '')).slice(0, 500);
-    if (!res.ok) throw new Error(`LRS ответил ${res.status}: ${text}`);
+    // 409 Conflict — такой statementId уже принят LRS (повтор доставки): считаем успехом, иначе зациклимся
+    if (!res.ok && res.status !== 409) throw new Error(`LRS ответил ${res.status}: ${text}`);
     await query(`UPDATE xapi_statements SET status = 'ok', sent_at = now(), error = NULL WHERE id = $1`, [row.id]);
     return { status: res.status };
   } catch (e) {

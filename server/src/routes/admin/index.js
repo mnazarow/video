@@ -186,7 +186,7 @@ export default async function adminRoutes(app) {
     return { ok: true };
   });
 
-  app.post('/users/:id/password-reset-link', async (req) => {
+  app.post('/users/:id/password-reset-link', { preHandler: app.requireAdmin }, async (req) => {
     const u = await one('SELECT * FROM users WHERE id = $1', [req.params.id]);
     if (!u) throw notFound();
     const token = randomToken(32);

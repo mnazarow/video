@@ -81,7 +81,7 @@ export const DEFAULTS = {
   'ldap.attr_name': 'displayName',
   'ldap.attr_login': 'sAMAccountName',
   'ldap.auto_approve': true,
-  'ldap.tls_reject_unauthorized': false,
+  'ldap.tls_reject_unauthorized': true,
   'ldap.admin_group_dn': '',
   'ldap.required_group_dn': '',
   'ldap.timeout_ms': 8000,

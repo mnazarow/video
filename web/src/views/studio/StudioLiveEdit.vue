@@ -10,6 +10,7 @@ import LiveInteract from '../../components/LiveInteract.vue';
 import VideoPlayer from '../../components/player/VideoPlayer.vue';
 import EmptyState from '../../components/EmptyState.vue';
 import { VISIBILITY, toLocalInput, fmtNumber, timeAgo } from '../../utils/format.js';
+import { copyWithToast } from '../../utils/clipboard.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -42,7 +43,7 @@ async function resetKey() { if (!(await ui.ask({ title: 'Сменить ключ
 async function endStream() { if (!(await ui.ask({ title: 'Завершить эфир?', message: 'Зрители будут отключены. Если включена запись, она будет обработана и опубликована.', okLabel: 'Завершить', danger: true }))) return; await post(`/api/studio/live/${stream.value.id}/end`, {}); stopBrowser(); load(); }
 async function reopen() { await patch(`/api/studio/live/${stream.value.id}`, { status: 'idle' }); load(); }
 async function remove() { if (!(await ui.ask({ title: 'Удалить трансляцию?', message: 'Запись эфира (если есть) останется на канале.', okLabel: 'Удалить', danger: true }))) return; await del(`/api/studio/live/${stream.value.id}`); router.push('/studio/live'); }
-function copy(t) { navigator.clipboard.writeText(t); ui.toast('Скопировано'); }
+async function copy(t) { await copyWithToast(ui, t); }
 
 // --- Эфир из браузера (WHIP / WebRTC) ---------------------------------------------
 const browserState = ref('idle'); // idle | preview | live | error

@@ -10,7 +10,17 @@ function wireBus() {
   for (const t of ['video.progress', 'video.ready', 'video.failed', 'video.subtitles', 'video.published', 'video.ai']) {
     bus.on(t, (e) => { if (e.ownerId) localToUser(e.ownerId, { ...e }); localToChannel('admin', { ...e }); });
   }
-  for (const t of ['live.started', 'live.ended']) bus.on(t, (e) => localBroadcast({ ...e }));
+  // Приватные эфиры не анонсируем всем: рассылаем только владельцу и админам
+  for (const t of ['live.started', 'live.ended']) {
+    bus.on(t, (e) => {
+      if (e.visibility && !['public', 'internal'].includes(e.visibility)) {
+        if (e.ownerId) localToUser(e.ownerId, { ...e });
+        localToChannel('admin', { ...e });
+        return;
+      }
+      localBroadcast({ ...e });
+    });
+  }
   bus.on('job.enqueued', (e) => localToChannel('admin', { ...e }));
   bus.on('settings.changed', (e) => localBroadcast({ type: 'settings.changed' }));
 }

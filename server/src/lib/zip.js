@@ -1,6 +1,19 @@
 // Минимальный ZIP-упаковщик (deflate) без внешних зависимостей — для SCORM-пакетов и экспортов.
 import zlib from 'node:zlib';
 
+// zlib.crc32 появился только в Node 20.15/22 — на более старых версиях считаем сами.
+let CRC_TABLE = null;
+function crc32(buf) {
+  if (typeof zlib.crc32 === 'function') return zlib.crc32(buf) >>> 0;
+  if (!CRC_TABLE) {
+    CRC_TABLE = new Int32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); CRC_TABLE[n] = c; }
+  }
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
 function dosDateTime(d = new Date()) {
   const time = ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | ((Math.floor(d.getSeconds() / 2)) & 31);
   const date = (((d.getFullYear() - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31);
@@ -16,7 +29,7 @@ export function zipBuffer(files) {
   for (const f of files) {
     const name = Buffer.from(String(f.name).replace(/\\/g, '/'), 'utf8');
     const data = Buffer.isBuffer(f.data) ? f.data : Buffer.from(String(f.data ?? ''), 'utf8');
-    const crc = zlib.crc32(data) >>> 0;
+    const crc = crc32(data);
     let method = 8; let packed = zlib.deflateRawSync(data, { level: 9 });
     if (packed.length >= data.length) { method = 0; packed = data; }
     const { time, date } = dosDateTime(f.mtime || new Date());

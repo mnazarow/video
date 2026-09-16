@@ -91,16 +91,18 @@ function destroySource() {
   if (hls) { hls.destroy(); hls = null; }
   levels.value = [];
 }
-function loadSource() {
+function loadSource(opts = {}) {
   destroySource();
   const el = video.value;
   if (!el) return;
   state.value.error = ''; state.value.ended = false;
+  // Автозапуск можно переопределить: при смене режима «только звук» продолжаем ровно то, что было (пауза — значит пауза)
+  const wantPlay = opts.autoplay !== undefined ? opts.autoplay : props.autoplay;
   const src = props.src;
   if (props.audioOnly && props.audio) {
     // Режим «только звук»: проигрываем аудиодорожку, экран остаётся с обложкой
     el.src = props.audio;
-    el.addEventListener('loadedmetadata', () => { applyStart(); emit('ready'); if (props.autoplay) tryPlay(); }, { once: true });
+    el.addEventListener('loadedmetadata', () => { applyStart(); emit('ready'); if (wantPlay) tryPlay(); }, { once: true });
     return;
   }
   if (src && Hls.isSupported()) {
@@ -117,7 +119,7 @@ function loadSource() {
       if (preferred !== -1) { const idx = levels.value.findIndex((l) => l.height === preferred); if (idx >= 0) { hls.currentLevel = idx; state.value.quality = idx; } }
       applyStart();
       emit('ready');
-      if (props.autoplay) tryPlay();
+      if (wantPlay) tryPlay();
     });
     hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => { state.value.autoLevel = data.level; });
     hls.on(Hls.Events.ERROR, (_, data) => {
@@ -131,10 +133,10 @@ function loadSource() {
     });
   } else if (src && el.canPlayType('application/vnd.apple.mpegurl')) {
     el.src = src;
-    el.addEventListener('loadedmetadata', () => { applyStart(); emit('ready'); if (props.autoplay) tryPlay(); }, { once: true });
+    el.addEventListener('loadedmetadata', () => { applyStart(); emit('ready'); if (wantPlay) tryPlay(); }, { once: true });
   } else if (props.mp4) {
     el.src = props.mp4;
-    el.addEventListener('loadedmetadata', () => { applyStart(); emit('ready'); if (props.autoplay) tryPlay(); }, { once: true });
+    el.addEventListener('loadedmetadata', () => { applyStart(); emit('ready'); if (wantPlay) tryPlay(); }, { once: true });
   } else {
     state.value.error = 'Видео недоступно для воспроизведения в этом браузере';
   }
@@ -337,6 +339,8 @@ function currentTime() { return video.value?.currentTime || 0; }
 function isPaused() { return video.value?.paused ?? true; }
 defineExpose({ seekTo, togglePlay, currentTime, isPaused, play: tryPlay, pause: () => video.value?.pause(), flushProgress, el: () => video.value, handleKey: onKey });
 
+function onUnload() { flushProgress(true); }
+
 onMounted(() => {
   const el = video.value;
   el.volume = ls('volume', 1); el.muted = props.muted || ls('muted', false);
@@ -351,7 +355,9 @@ onMounted(() => {
   el.addEventListener('enterpictureinpicture', () => { state.value.pip = true; });
   el.addEventListener('leavepictureinpicture', () => { state.value.pip = false; });
   progressTimer = setInterval(() => flushProgress(false), 5000);
-  window.addEventListener('beforeunload', () => flushProgress(true));
+  window.addEventListener('beforeunload', onUnload);
+  // pagehide надёжнее beforeunload на мобильных: там вкладку часто выгружают без него
+  window.addEventListener('pagehide', onUnload);
   root.value.addEventListener('keydown', onKey);
   nextTick(() => { if (props.subtitles.length && ls('captions', null)) setCaptions(defaultCaptionIndex()); else { const tracks = el.textTracks; for (let i = 0; i < tracks.length; i++) tracks[i].mode = 'hidden'; } });
 });
@@ -360,6 +366,8 @@ onBeforeUnmount(() => {
   clearInterval(progressTimer);
   clearTimeout(hideTimer);
   document.removeEventListener('fullscreenchange', onFsChange);
+  window.removeEventListener('beforeunload', onUnload);
+  window.removeEventListener('pagehide', onUnload);
   destroySource();
 });
 watch(() => props.src, () => { bucketsSeen = new Set(); bucketsPending = new Set(); watchedDelta = 0; state.value.time = 0; state.value.duration = props.duration || 0; loadSource(); loadStoryboard(); });
@@ -368,8 +376,8 @@ watch(() => props.audioOnly, () => {
   const el = video.value; if (!el) return;
   const pos = el.currentTime || 0; const wasPlaying = !el.paused;
   flushProgress(true);
-  loadSource();
-  const resume = () => { try { el.currentTime = pos; } catch { /* ignore */ } if (wasPlaying) tryPlay(); };
+  loadSource({ autoplay: wasPlaying });
+  const resume = () => { try { el.currentTime = pos; } catch { /* ignore */ } };
   if (hls) hls.once(Hls.Events.MANIFEST_PARSED, resume); else el.addEventListener('loadedmetadata', resume, { once: true });
 });
 watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.textTracks || []; for (let i = 0; i < tracks.length; i++) tracks[i].mode = i === state.value.captions ? 'showing' : 'hidden'; }));

@@ -111,3 +111,11 @@ export function verifyTotp(secret, code, window = 1) {
 export function totpUri(secret, email, issuer) {
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&digits=6&period=30`;
 }
+
+/** Сравнение секретов за константное время (токены интеграций, коды). */
+export function timingSafeEqualStr(a, b) {
+  const x = Buffer.from(String(a ?? ''), 'utf8');
+  const y = Buffer.from(String(b ?? ''), 'utf8');
+  if (x.length !== y.length || !x.length) return false;
+  return crypto.timingSafeEqual(x, y);
+}

@@ -4,10 +4,12 @@
 #
 #    sudo ./update.sh                 # из папки с новой версией исходников
 #    sudo corpvideo update            # то же, из установленной копии (git pull, если это git-репозиторий)
-#    sudo ./update.sh --source corpvideo-1.3.0.tar.gz | --repo URL
+#    sudo ./update.sh --source corpvideo-1.3.1.tar.gz | --repo URL
 #    sudo ./update.sh --no-backup     # не делать резервную копию БД перед обновлением
 # =====================================================================================
 set -Eeuo pipefail
+# Дамп базы содержит все данные портала — создаём его недоступным другим пользователям
+umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF=/etc/corpvideo/install.conf
 [ -f "$CONF" ] || { echo "CorpVideo не установлен (нет $CONF). Используйте install.sh" >&2; exit 1; }
@@ -39,9 +41,12 @@ step "Обновление CorpVideo: $VERSION → $NEW_VERSION ($MODE)"
 if [ "$NO_BACKUP" != "1" ]; then
   step "Резервная копия базы данных"
   BK="$DATA_DIR/backups/pre-update-$(date +%Y%m%d-%H%M%S).dump"
-  mkdir -p "$DATA_DIR/backups"
-  if [ "$MODE" = "docker" ]; then (cd "$APP_DIR" && docker compose exec -T db pg_dump -U corpvideo -Fc corpvideo > "$BK")
-  else su - postgres -c "pg_dump -Fc corpvideo" > "$BK"; fi
+  mkdir -p "$DATA_DIR/backups"; chmod 700 "$DATA_DIR/backups"
+  dump_failed() { rm -f "$BK"; die "Не удалось сделать резервную копию базы — обновление прервано (см. $CV_LOG)"; }
+  if [ "$MODE" = "docker" ]; then (cd "$APP_DIR" && docker compose exec -T db pg_dump -U corpvideo -Fc corpvideo > "$BK") || dump_failed
+  else su - postgres -c "pg_dump -Fc corpvideo" > "$BK" || dump_failed; fi
+  chmod 600 "$BK"
+  [ -s "$BK" ] || dump_failed
   ok "Сохранено: $BK ($(du -h "$BK" | cut -f1))"
 fi
 
@@ -50,7 +55,7 @@ if [ "$SOURCE_DIR" != "$APP_DIR" ]; then
   rsync -a --delete --exclude '.env' --exclude 'node_modules' --exclude 'web/dist' --exclude 'server/data' --exclude '.git' --exclude '/mediamtx/' --exclude 'deploy/mediamtx/mediamtx.yml' "$SOURCE_DIR/" "$APP_DIR/"
   ok "Файлы обновлены"
 fi
-save_conf VERSION "$NEW_VERSION"; save_conf UPDATED_AT "$(date -Is)"
+# Версию в install.conf фиксируем только после успешного обновления (см. конец файла)
 
 cv_rollback() { warn "Обновление прервано. Резервная копия БД: ${BK:-нет}. Восстановление: corpvideo restore <файл>"; }
 
@@ -69,13 +74,11 @@ if [ "$MODE" = "docker" ]; then
   docker compose exec -T api curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 || { docker compose logs --tail=50 api >&2; die "API не поднялся после обновления"; }
   docker image prune -f >>"$CV_LOG" 2>&1 || true
 else
-  step "Зависимости и сборка"
-  cd "$APP_DIR/server" && npm ci --omit=dev --no-audit --no-fund >>"$CV_LOG" 2>&1 || die "npm ci (server)"
-  cd "$APP_DIR/web" && npm ci --no-audit --no-fund >>"$CV_LOG" 2>&1 && npm run build >>"$CV_LOG" 2>&1 || die "Сборка веб-интерфейса"
-  rm -rf "$APP_DIR/web/node_modules"
-  # Функции нативной установки (MediaMTX, nginx); переменные CV_* — из install.conf
+  # Функции нативной установки (сборка, MediaMTX, nginx); переменные CV_* — из install.conf
   # shellcheck disable=SC1091
   . "$APP_DIR/scripts/install-native.sh"
+  # Та же сборка, что и при установке: повторы при сетевых сбоях, хвост лога при ошибке, запасной web/dist
+  build_app "$APP_DIR" "$([ -f "$SOURCE_DIR/web/dist/index.html" ] && echo "$SOURCE_DIR/web/dist" || true)"
   CV_DOMAIN="$DOMAIN"; CV_SSL="$SSL_MODE"; CV_LE_EMAIL="${LE_EMAIL:-}"; CV_BASE_URL="$BASE_URL"; CV_VERSION="$NEW_VERSION"
   is_ip=0; [[ "$CV_DOMAIN" =~ ^[0-9.]+$ ]] && is_ip=1
   cv_rollback() { warn "Обновление прервано. Резервная копия БД: ${BK:-нет}. Восстановление: corpvideo restore <файл>"; }
@@ -99,4 +102,7 @@ else
   ok "Конфигурация nginx обновлена"
 fi
 install -m 755 "$APP_DIR/scripts/corpvideo-cli.sh" /usr/local/bin/corpvideo
+# Версия фиксируется последней: при сбое на любом шаге в install.conf остаётся прежняя,
+# и повторный запуск обновления не считает систему уже обновлённой
+save_conf VERSION "$NEW_VERSION"; save_conf UPDATED_AT "$(date -Is)"
 echo; echo "${C_GREEN}${C_BOLD}Обновление до $NEW_VERSION завершено.${C_RESET} Проверка: corpvideo status"

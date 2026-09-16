@@ -165,6 +165,61 @@ export async function assignmentReport(a) {
   return { people, videos, total: people.length, completed: done, overdue: a.due_at && new Date(a.due_at) < new Date() ? people.length - done : 0 };
 }
 
+/**
+ * Сводка (всего адресатов / выполнили / просрочено) сразу для списка назначений — 3 запроса на страницу
+ * вместо трёх на каждую строку. Логика совпадает с assignmentReport.
+ */
+export async function assignmentSummaries(assignments) {
+  const ids = (assignments || []).map((a) => a.id);
+  const out = new Map();
+  for (const a of assignments || []) out.set(a.id, { total: 0, completed: 0, overdue: 0 });
+  if (!ids.length) return out;
+
+  const targets = await many(
+    `SELECT t.assignment_id, u.id AS user_id FROM assignment_targets t
+     JOIN users u ON u.status = 'active' AND u.deleted_at IS NULL
+       AND (t.target_type = 'all' OR t.user_id = u.id OR (t.target_type = 'group' AND EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = t.group_id AND gm.user_id = u.id)))
+     WHERE t.assignment_id = ANY($1) GROUP BY t.assignment_id, u.id`, [ids]);
+  const videos = await many(
+    `SELECT a.id AS assignment_id, v.id AS video_id FROM assignments a JOIN videos v ON v.id = a.video_id AND v.deleted_at IS NULL WHERE a.id = ANY($1) AND a.kind = 'video'
+     UNION ALL
+     SELECT a.id, v.id FROM assignments a JOIN playlist_items pi ON pi.playlist_id = a.playlist_id JOIN videos v ON v.id = pi.video_id AND v.deleted_at IS NULL AND v.status = 'ready'
+     WHERE a.id = ANY($1) AND a.kind <> 'video'`, [ids]);
+  const done = await many(`SELECT assignment_id, user_id, video_id FROM assignment_progress WHERE assignment_id = ANY($1) AND completed_at IS NOT NULL`, [ids]);
+
+  const usersOf = new Map(); const videosOf = new Map(); const doneOf = new Map();
+  for (const r of targets) { const k = String(r.assignment_id); if (!usersOf.has(k)) usersOf.set(k, new Set()); usersOf.get(k).add(String(r.user_id)); }
+  for (const r of videos) { const k = String(r.assignment_id); if (!videosOf.has(k)) videosOf.set(k, new Set()); videosOf.get(k).add(String(r.video_id)); }
+  for (const r of done) { const k = `${r.assignment_id}|${r.user_id}`; if (!doneOf.has(k)) doneOf.set(k, new Set()); doneOf.get(k).add(String(r.video_id)); }
+
+  for (const a of assignments) {
+    const k = String(a.id);
+    const users = usersOf.get(k) || new Set();
+    const vids = videosOf.get(k) || new Set();
+    let completed = 0;
+    if (vids.size) {
+      for (const uid of users) {
+        const d = doneOf.get(`${k}|${uid}`);
+        if (d && [...vids].every((v) => d.has(v))) completed++;
+      }
+    }
+    const overdue = a.due_at && new Date(a.due_at) < new Date() ? users.size - completed : 0;
+    out.set(a.id, { total: users.size, completed, overdue });
+  }
+  return out;
+}
+
+/** Адресаты (группы/пользователи) сразу для списка назначений. */
+export async function assignmentTargets(ids) {
+  const map = new Map();
+  if (!ids || !ids.length) return map;
+  const rows = await many(
+    `SELECT t.*, g.name AS group_name, u.display_name AS user_name FROM assignment_targets t
+     LEFT JOIN groups g ON g.id = t.group_id LEFT JOIN users u ON u.id = t.user_id WHERE t.assignment_id = ANY($1)`, [ids]);
+  for (const r of rows) { const k = String(r.assignment_id); if (!map.has(k)) map.set(k, []); map.get(k).push(r); }
+  return map;
+}
+
 /** Уведомить адресатов о новом назначении. */
 export async function notifyAssigned(a, actorId) {
   const users = await resolveTargetUsers(a.id);

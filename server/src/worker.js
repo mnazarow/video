@@ -4,7 +4,7 @@ import { config, assertConfig } from './config.js';
 import { startListener, bus, closeDb, query, one } from './db.js';
 import { runMigrations } from './migrate.js';
 import { loadSettings } from './lib/settings.js';
-import { claimJob, heartbeat as jobHeartbeat, completeJob, failJob, reapStaleJobs, enqueue } from './lib/jobs.js';
+import { claimJob, heartbeat as jobHeartbeat, completeJob, failJob, reapStaleJobs, enqueue, requeueOwnJobs } from './lib/jobs.js';
 import { runTranscode, runThumbnails, recomputeStorage } from './jobs/transcode.js';
 import { runSubtitlesAsr } from './jobs/subtitles.js';
 import { runEmail, runLiveImport, runMaintenance } from './jobs/misc.js';
@@ -49,6 +49,9 @@ const HANDLERS = {
 
 // Тяжёлые задания (ffmpeg) ограничены concurrency; лёгкие (письма) выполняются отдельным слотом.
 const HEAVY = new Set(['transcode', 'thumbnails', 'subtitles_asr', 'live_import', 'recompute_storage', 'import_url', 'video_edit', 'remove_silence', 'clip_create', 'ocr', 'audio_track']);
+// Долгие сетевые задания (ИИ, RAG): процессор не занимают, но и письма с вебхуками задерживать не должны — отдельная полоса.
+const SLOW = new Set(['ai_enrich', 'rag_push', 'subtitle_translate']);
+const QUICK_TYPES = () => Object.keys(HANDLERS).filter((t) => !HEAVY.has(t) && !SLOW.has(t));
 const running = new Map(); // jobId → { abort }
 let stopping = false;
 
@@ -97,9 +100,14 @@ function heavyRunning() {
   for (const r of running.values()) if (HEAVY.has(r.job.type)) n++;
   return n;
 }
+function slowRunning() {
+  let n = 0;
+  for (const r of running.values()) if (SLOW.has(r.job.type)) n++;
+  return n;
+}
 function lightRunning() {
   let n = 0;
-  for (const r of running.values()) if (!HEAVY.has(r.job.type)) n++;
+  for (const r of running.values()) if (!HEAVY.has(r.job.type) && !SLOW.has(r.job.type)) n++;
   return n;
 }
 
@@ -114,8 +122,12 @@ async function loop() {
         const job = await claimJob(config.workerId, [...HEAVY]);
         if (job) { picked = true; runJob(job); }
       }
+      if (slowRunning() < 2) {
+        const job = await claimJob(config.workerId, [...SLOW]);
+        if (job) { picked = true; runJob(job); }
+      }
       if (lightRunning() < 2) {
-        const job = await claimJob(config.workerId, Object.keys(HANDLERS).filter((t) => !HEAVY.has(t)));
+        const job = await claimJob(config.workerId, QUICK_TYPES());
         if (job) { picked = true; runJob(job); }
       }
     } catch (e) {
@@ -133,8 +145,10 @@ async function main() {
   bus.on('job.enqueued', wakeUp);
   bus.on('job.cancel', (e) => { const r = running.get(e.jobId); if (r) r.abort(); });
 
-  // Зависшие задания от прошлых запусков этого воркера возвращаем в очередь
-  await query(`UPDATE jobs SET status = 'queued', locked_by = NULL, locked_at = NULL, run_at = now() WHERE status = 'running' AND locked_by = $1`, [config.workerId]);
+  // Зависшие задания прошлых запусков возвращаем в очередь (не выдавая лишней попытки).
+  // Только те, что давно не подавали признаков жизни: при одинаковом WORKER_ID у нескольких
+  // воркеров иначе можно перезапустить задание, которое прямо сейчас выполняет соседний процесс.
+  await requeueOwnJobs(config.workerId, { staleSeconds: 90 });
   setInterval(async () => {
     try { const r = await reapStaleJobs(5); if (r.length) log.warn({ n: r.length }, 'перезапущены зависшие задания'); } catch { /* ignore */ }
   }, 60000).unref();
@@ -168,7 +182,7 @@ async function shutdown(signal) {
   while (running.size && Date.now() < deadline) await new Promise((r) => setTimeout(r, 500));
   for (const r of running.values()) r.abort();
   await new Promise((r) => setTimeout(r, 1000));
-  await query(`UPDATE jobs SET status = 'queued', locked_by = NULL, locked_at = NULL, run_at = now(), attempts = greatest(attempts - 1, 0) WHERE status = 'running' AND locked_by = $1`, [config.workerId]).catch(() => {});
+  await requeueOwnJobs(config.workerId, { ids: [...running.keys()] }).catch(() => {});
   await closeDb().catch(() => {});
   process.exit(0);
 }

@@ -7,8 +7,11 @@ import { enqueue } from '../../lib/jobs.js';
 import { WEBHOOK_EVENTS, isWebhookEvent } from '../../lib/webhooks.js';
 import { config } from '../../config.js';
 
-function hookOut(h) {
-  return { id: h.id, name: h.name, url: h.url, secret: h.secret, events: h.events || [], enabled: h.enabled, createdAt: h.created_at, lastStatus: h.last_status, lastAt: h.last_at, failCount: h.fail_count, deliveries: h.deliveries ?? undefined, failed: h.failed ?? undefined };
+/** Секрет подписи наружу не отдаём: в списке — только подсказка, целиком — отдельным запросом (с записью в журнал). */
+function hookOut(h, { secret = false } = {}) {
+  const out = { id: h.id, name: h.name, url: h.url, secretHint: h.secret ? `${String(h.secret).slice(0, 6)}…` : '', events: h.events || [], enabled: h.enabled, createdAt: h.created_at, lastStatus: h.last_status, lastAt: h.last_at, failCount: h.fail_count, deliveries: h.deliveries ?? undefined, failed: h.failed ?? undefined };
+  if (secret) out.secret = h.secret;
+  return out;
 }
 function deliveryOut(d) {
   return { id: Number(d.id), webhookId: d.webhook_id, event: d.event, status: d.status, httpStatus: d.http_status, attempts: d.attempts, response: d.response, createdAt: d.created_at, deliveredAt: d.delivered_at, payload: d.payload };
@@ -33,7 +36,7 @@ export default async function adminWebhookRoutes(app) {
     const secret = String(b.secret || '').trim() || randomToken(24);
     const h = await one('INSERT INTO webhooks(name, url, secret, events, enabled, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [name, url, secret, events, b.enabled !== false, req.user.id]);
     await audit(req, 'webhook.create', { targetType: 'webhook', targetId: h.id, details: { name, url, events } });
-    return { webhook: hookOut(h) };
+    return { webhook: hookOut(h, { secret: true }) };
   });
 
   app.patch('/webhooks/:id', { preHandler: app.requireAdmin }, async (req) => {
@@ -50,6 +53,13 @@ export default async function adminWebhookRoutes(app) {
     if (sets.length) await query(`UPDATE webhooks SET ${sets.join(', ')} WHERE id = $1`, params);
     await audit(req, 'webhook.update', { targetType: 'webhook', targetId: h.id, details: Object.keys(b) });
     return { webhook: hookOut(await one('SELECT * FROM webhooks WHERE id = $1', [h.id])) };
+  });
+
+  app.get('/webhooks/:id/secret', { preHandler: app.requireAdmin }, async (req) => {
+    const h = await one('SELECT * FROM webhooks WHERE id = $1', [req.params.id]);
+    if (!h) throw notFound('Вебхук не найден');
+    await audit(req, 'webhook.secret_view', { targetType: 'webhook', targetId: h.id, details: { name: h.name } });
+    return { secret: h.secret };
   });
 
   app.delete('/webhooks/:id', { preHandler: app.requireAdmin }, async (req) => {

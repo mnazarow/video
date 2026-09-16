@@ -208,13 +208,15 @@ export default async function authRoutes(app) {
 
   // --- Вход через SSO (OpenID Connect) -----------------------------------------------------
   const oidcRedirect = () => `${config.baseUrl}/api/auth/oidc/callback`;
+  const OIDC_COOKIE = 'cv_oidc';
   app.get('/oidc/start', async (req, reply) => {
     const s = req.settings;
     if (!s['oidc.enabled'] || !s['oidc.issuer'] || !s['oidc.client_id']) throw badRequest('Вход через SSO не настроен');
     const next = String(req.query.next || '/');
-    let url;
-    try { url = await oidcStart(s, oidcRedirect(), next.startsWith('/') && !next.startsWith('//') ? next : '/'); } catch (e) { return reply.redirect(`/login?error=${encodeURIComponent('SSO: ' + e.message)}`); }
-    return reply.redirect(url);
+    let started;
+    try { started = await oidcStart(s, oidcRedirect(), next.startsWith('/') && !next.startsWith('//') ? next : '/'); } catch (e) { return reply.redirect(`/login?error=${encodeURIComponent('SSO: ' + e.message)}`); }
+    reply.setCookie(OIDC_COOKIE, started.state, { path: '/api/auth', httpOnly: true, sameSite: 'lax', secure: config.cookieSecure, maxAge: 900 });
+    return reply.redirect(started.url);
   });
   app.get('/oidc/callback', async (req, reply) => {
     const s = req.settings;
@@ -222,7 +224,9 @@ export default async function authRoutes(app) {
     if (!s['oidc.enabled']) return fail('Вход через SSO отключён');
     if (req.query.error) return fail(`SSO: ${req.query.error_description || req.query.error}`);
     let info;
-    try { info = await oidcFinish(s, oidcRedirect(), { code: String(req.query.code || ''), state: String(req.query.state || '') }); } catch (e) { req.log.warn({ err: e.message }, 'oidc'); return fail('SSO: ' + e.message); }
+    const boundState = String(req.cookies?.[OIDC_COOKIE] || '');
+    reply.clearCookie(OIDC_COOKIE, { path: '/api/auth' });
+    try { info = await oidcFinish(s, oidcRedirect(), { code: String(req.query.code || ''), state: String(req.query.state || ''), boundState }); } catch (e) { req.log.warn({ err: e.message }, 'oidc'); return fail('SSO: ' + e.message); }
     if (!info.email || !EMAIL_RE.test(info.email)) return fail('SSO: провайдер не передал адрес электронной почты (проверьте scope email)');
     if (s['oidc.check_domain'] && !(await domainRule(info.email))) return fail(`Вход с домена @${emailDomain(info.email)} не разрешён. Обратитесь к администратору.`);
     let user = await one('SELECT * FROM users WHERE oidc_sub = $1 OR email = $2 ORDER BY (oidc_sub = $1) DESC LIMIT 1', [info.sub, info.email]);

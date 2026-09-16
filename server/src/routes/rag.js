@@ -3,6 +3,7 @@ import { one, many, query } from '../db.js';
 import { badRequest, forbidden, notFound, unauthorized, paging } from '../lib/util.js';
 import { isStaff } from '../lib/access.js';
 import { buildDocument, ragVisibilitySql, ragStatus } from '../lib/rag.js';
+import { timingSafeEqualStr } from '../lib/crypto.js';
 import { enqueue } from '../lib/jobs.js';
 import { requireEditable } from './videos.js';
 import { audit } from '../lib/audit.js';
@@ -15,7 +16,7 @@ function pullAuth(req) {
   const s = req.settings;
   const authz = String(req.headers.authorization || '');
   const token = authz.startsWith('Bearer ') ? authz.slice(7).trim() : String(req.query.token || '');
-  if (s['rag.pull_token'] && token && token === s['rag.pull_token']) return true;
+  if (s['rag.pull_token'] && token && timingSafeEqualStr(token, s['rag.pull_token'])) return true;
   if (isStaff(req.user)) return true;
   throw req.user ? forbidden('Доступ к документам RAG только для модераторов или по токену интеграции') : unauthorized('Нужен токен интеграции (Bearer)');
 }
@@ -43,7 +44,11 @@ export default async function ragRoutes(app) {
   app.get('/rag/documents/:id', async (req, reply) => {
     pullAuth(req);
     const s = req.settings;
-    const v = await one(`SELECT ${V_SELECT} FROM ${V_FROM} WHERE (v.id::text = $1 OR v.short_id = $1) AND v.deleted_at IS NULL`, [String(req.params.id)]);
+    const v = await one(
+      `SELECT ${V_SELECT} FROM ${V_FROM} WHERE (v.id::text = $1 OR v.short_id = $1)
+         AND v.deleted_at IS NULL AND v.status = 'ready' AND v.moderation_status = 'approved' AND ${ragVisibilitySql(s)}`,
+      [String(req.params.id)],
+    );
     if (!v) throw notFound('Видео не найдено');
     const doc = await buildDocument(v, s);
     if (req.query.format === 'markdown' || req.query.format === 'md') { reply.type('text/markdown; charset=utf-8'); return doc.markdown; }

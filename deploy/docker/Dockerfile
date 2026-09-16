@@ -5,6 +5,8 @@
 FROM node:22-bookworm-slim AS web
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
+# Долгие таймауты и повторы: в корпоративных сетях npm часто отваливается по ETIMEDOUT
+ENV NPM_CONFIG_FETCH_RETRIES=5 NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 NPM_CONFIG_FETCH_TIMEOUT=600000
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build

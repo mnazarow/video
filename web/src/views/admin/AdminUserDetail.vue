@@ -7,6 +7,7 @@ import { useAuth } from '../../stores/auth.js';
 import ChannelAvatar from '../../components/ChannelAvatar.vue';
 import VideoCard from '../../components/VideoCard.vue';
 import { fmtDateTime, timeAgo } from '../../utils/format.js';
+import { copyWithToast } from '../../utils/clipboard.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -15,6 +16,7 @@ const auth = useAuth();
 const data = ref(null);
 const form = ref({});
 const resetLink = ref('');
+async function copy(t) { await copyWithToast(ui, t, 'Ссылка скопирована'); }
 async function load() { data.value = await get(`/api/admin/users/${route.params.id}`); const u = data.value.user; form.value = { displayName: u.displayName, email: u.email, handle: u.handle, role: u.role, canUpload: u.canUpload, canStream: u.canStream, password: '' }; }
 onMounted(load);
 async function save() { try { const r = await patch(`/api/admin/users/${route.params.id}`, form.value); data.value.user = r.user; form.value.password = ''; ui.toast('Сохранено', { type: 'success' }); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
@@ -58,7 +60,7 @@ const STATUS = { active: ['Активен', 'success'], pending_approval: ['Жд
             <div class="field" style="justify-content:flex-end; gap: 10px"><label class="switch"><input type="checkbox" v-model="form.canUpload" /><span class="track"></span><span>Может загружать видео</span></label><label class="switch"><input type="checkbox" v-model="form.canStream" /><span class="track"></span><span>Может вести трансляции</span></label></div>
           </div>
           <div class="form-actions"><button class="btn primary" @click="save">Сохранить</button><button class="btn" @click="reset"><Icon name="key" :size="16" /> Ссылка для сброса пароля</button><button v-if="data.user.totpEnabled" class="btn" @click="totpReset">Сбросить 2FA</button></div>
-          <div v-if="resetLink" class="code-box mt-8"><span>{{ resetLink }}</span><button class="ibtn sm" @click="navigator.clipboard.writeText(resetLink)"><Icon name="copy" :size="16" /></button></div>
+          <div v-if="resetLink" class="code-box mt-8"><span>{{ resetLink }}</span><button class="ibtn sm" @click="copy(resetLink)"><Icon name="copy" :size="16" /></button></div>
           <div class="divider"></div>
           <div class="row wrap"><button class="btn ghost danger sm" @click="remove(false)">Удалить учётную запись</button><button class="btn ghost danger sm" @click="remove(true)">Удалить вместе с видео</button></div>
         </div>

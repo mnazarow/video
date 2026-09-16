@@ -1,9 +1,10 @@
 <script setup>
 // Управление вебхуками: список, создание, проверка, журнал доставок, повтор.
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { get, post, patch, del } from '../../api.js';
 import { useUi } from '../../stores/ui.js';
 import { fmtDateTime } from '../../utils/format.js';
+import { copyWithToast } from '../../utils/clipboard.js';
 
 const ui = useUi();
 const hooks = ref([]);
@@ -13,18 +14,44 @@ const showForm = ref(false);
 const deliveries = ref({ hook: null, list: [], open: null });
 const saving = ref(false);
 
-async function load() { const [h, e] = await Promise.all([get('/api/admin/webhooks'), get('/api/admin/webhooks/events')]); hooks.value = h.webhooks; events.value = e.events; }
+const loadError = ref('');
+async function load() {
+  try {
+    const [h, e] = await Promise.all([get('/api/admin/webhooks'), get('/api/admin/webhooks/events')]);
+    hooks.value = h.webhooks; events.value = e.events; loadError.value = '';
+  } catch (e) { loadError.value = e.message; ui.toast(e.message, { type: 'error' }); }
+}
 onMounted(load);
+
+// Отложенные обновления журнала: гасим при уходе со страницы, иначе обращение к закрытой панели
+const timers = new Set();
+function later(fn, ms) { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); }
+onBeforeUnmount(() => { for (const t of timers) clearTimeout(t); timers.clear(); });
 async function create() {
   saving.value = true;
   try { const r = await post('/api/admin/webhooks', form.value); hooks.value.push(r.webhook); showForm.value = false; form.value = { name: '', url: '', secret: '', events: [] }; ui.toast(`Вебхук создан. Секрет для проверки подписи: ${r.webhook.secret}`, { type: 'success', timeout: 12000 }); } catch (e) { ui.toast(e.message, { type: 'error' }); } finally { saving.value = false; }
 }
-async function toggle(h) { const r = await patch(`/api/admin/webhooks/${h.id}`, { enabled: !h.enabled }); Object.assign(h, r.webhook); }
-async function remove(h) { if (!(await ui.ask({ title: `Удалить вебхук «${h.name}»?`, okLabel: 'Удалить', danger: true }))) return; await del(`/api/admin/webhooks/${h.id}`); hooks.value = hooks.value.filter((x) => x.id !== h.id); }
-async function test(h) { try { await post(`/api/admin/webhooks/${h.id}/test`, {}); ui.toast('Проверочное событие поставлено в очередь'); setTimeout(() => showDeliveries(h), 2500); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
-async function showDeliveries(h) { deliveries.value = { hook: h, list: (await get(`/api/admin/webhooks/${h.id}/deliveries?limit=50`)).deliveries, open: null }; const fresh = await get('/api/admin/webhooks'); hooks.value = fresh.webhooks; }
-async function retry(d) { await post(`/api/admin/webhooks/deliveries/${d.id}/retry`, {}); ui.toast('Повторная доставка поставлена в очередь'); setTimeout(() => showDeliveries(deliveries.value.hook), 2500); }
-function copy(t) { navigator.clipboard.writeText(t); ui.toast('Скопировано'); }
+async function toggle(h) { try { const r = await patch(`/api/admin/webhooks/${h.id}`, { enabled: !h.enabled }); Object.assign(h, r.webhook); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
+async function remove(h) {
+  if (!(await ui.ask({ title: `Удалить вебхук «${h.name}»?`, okLabel: 'Удалить', danger: true }))) return;
+  try { await del(`/api/admin/webhooks/${h.id}`); hooks.value = hooks.value.filter((x) => x.id !== h.id); if (deliveries.value.hook?.id === h.id) deliveries.value = { hook: null, list: [], open: null }; } catch (e) { ui.toast(e.message, { type: 'error' }); }
+}
+async function test(h) { try { await post(`/api/admin/webhooks/${h.id}/test`, {}); ui.toast('Проверочное событие поставлено в очередь'); later(() => showDeliveries(h), 2500); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
+async function showDeliveries(h) {
+  if (!h || !hooks.value.some((x) => x.id === h.id)) return; // вебхук могли удалить, пока ждал таймер
+  try {
+    const list = (await get(`/api/admin/webhooks/${h.id}/deliveries?limit=50`)).deliveries;
+    deliveries.value = { hook: h, list, open: deliveries.value.hook?.id === h.id ? deliveries.value.open : null };
+    hooks.value = (await get('/api/admin/webhooks')).webhooks;
+  } catch (e) { ui.toast(e.message, { type: 'error' }); }
+}
+async function retry(d) {
+  try { await post(`/api/admin/webhooks/deliveries/${d.id}/retry`, {}); ui.toast('Повторная доставка поставлена в очередь'); later(() => showDeliveries(deliveries.value.hook), 2500); } catch (e) { ui.toast(e.message, { type: 'error' }); }
+}
+// Секрет в списке не приходит — забираем его отдельным запросом (действие попадает в журнал аудита)
+async function copySecret(h) {
+  try { const r = await get(`/api/admin/webhooks/${h.id}/secret`); await copyWithToast(ui, r.secret, 'Секрет скопирован'); } catch (e) { ui.toast(e.message, { type: 'error' }); }
+}
 function toggleEvent(id) { const e = form.value.events; form.value.events = e.includes(id) ? e.filter((x) => x !== id) : [...e, id]; }
 </script>
 
@@ -43,12 +70,12 @@ function toggleEvent(id) { const e = form.value.events; form.value.events = e.in
     </div>
     <div class="table-wrap"><table class="table wh-table"><thead><tr><th>Вебхук</th><th>События</th><th>Состояние</th><th></th></tr></thead><tbody>
       <tr v-for="h in hooks" :key="h.id" :class="{ muted: !h.enabled }">
-        <td><b>{{ h.name }}</b><div class="tiny mono ellipsis" style="max-width:260px" :title="h.url">{{ h.url }}</div><div class="tiny muted">секрет: <span class="mono">{{ h.secret.slice(0, 6) }}…</span> <button class="ibtn sm" style="width:20px;height:20px;vertical-align:middle" title="Скопировать секрет" @click="copy(h.secret)"><Icon name="copy" :size="12" /></button></div></td>
+        <td><b>{{ h.name }}</b><div class="tiny mono ellipsis" style="max-width:260px" :title="h.url">{{ h.url }}</div><div class="tiny muted">секрет: <span class="mono">{{ h.secretHint }}</span> <button class="ibtn sm" style="width:20px;height:20px;vertical-align:middle" title="Скопировать секрет" @click="copySecret(h)"><Icon name="copy" :size="12" /></button></div></td>
         <td class="small" style="max-width:220px">{{ h.events.length ? h.events.join(', ') : 'все' }}</td>
         <td class="small"><span v-if="h.lastStatus" class="badge" :class="h.lastStatus < 300 ? 'success' : 'danger'">HTTP {{ h.lastStatus }}</span><span v-else class="muted">ещё не вызывался</span><div class="tiny muted">доставок: {{ h.deliveries }}<span v-if="h.failed" style="color:var(--danger)"> ({{ h.failed }} неуд.)</span><span v-if="h.failCount"> · ошибок подряд: {{ h.failCount }}</span></div><div v-if="h.lastAt" class="tiny muted">{{ fmtDateTime(h.lastAt) }}</div></td>
         <td class="actions nowrap"><button class="ibtn sm" title="Отправить проверочное событие" @click="test(h)"><Icon name="send" :size="16" /></button><button class="ibtn sm" title="Журнал доставок" @click="showDeliveries(h)"><Icon name="clipboardList" :size="16" /></button><button class="ibtn sm" :title="h.enabled ? 'Отключить' : 'Включить'" @click="toggle(h)"><Icon :name="h.enabled ? 'eyeOff' : 'eye'" :size="16" /></button><button class="ibtn sm" title="Удалить" @click="remove(h)"><Icon name="delete" :size="16" /></button></td>
       </tr>
-      <tr v-if="!hooks.length"><td colspan="4" class="muted">Вебхуков пока нет</td></tr>
+      <tr v-if="!hooks.length"><td colspan="4" class="muted">{{ loadError ? `Не удалось загрузить список: ${loadError}` : 'Вебхуков пока нет' }}</td></tr>
     </tbody></table></div>
     <div v-if="deliveries.hook" class="panel soft mt-16">
       <div class="row mb-8" style="align-items:center"><h4 class="grow">Журнал доставок — {{ deliveries.hook.name }}</h4><button class="ibtn sm" @click="deliveries.hook = null"><Icon name="close" :size="16" /></button></div>

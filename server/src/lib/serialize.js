@@ -128,7 +128,7 @@ export function videoFull(v, { renditions = [], subtitles = [], viewer = null, u
     renditions: renditions.map((r) => ({ label: r.label, width: r.width, height: r.height, bandwidth: r.bandwidth, bytes: r.bytes })),
     subtitles: subtitles.map(subtitleOut),
     processingError: isOwner || (viewer && (viewer.role === 'admin' || viewer.role === 'moderator')) ? v.processing_error : undefined,
-    moderationNote: v.moderation_note,
+    moderationNote: isOwner || (viewer && (viewer.role === 'admin' || viewer.role === 'moderator')) ? v.moderation_note : undefined,
     blockReason: isOwner ? v.block_reason : undefined,
     originalKept: v.original_kept,
     liveStreamId: v.live_stream_id,

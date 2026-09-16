@@ -1,7 +1,7 @@
 // Прочие задания: письма, импорт записи трансляции, обслуживание (расписание публикаций, очистка, агрегаты).
 import path from 'node:path';
 import fsp from 'node:fs/promises';
-import { one, query, many, publish } from '../db.js';
+import { one, query, many, publish, withLock } from '../db.js';
 import { sendMailNow } from '../lib/mailer.js';
 import { storage, ensureDir, exists, removeDir } from '../lib/storage.js';
 import { loadSettings } from '../lib/settings.js';
@@ -56,6 +56,19 @@ export async function runLiveImport(job, ctx) {
 
 /** Обслуживание: выполняется воркером раз в минуту. */
 export async function runMaintenance(job, ctx) {
+  // При нескольких воркерах обслуживание должно выполняться ровно один раз:
+  // иначе дайджесты рассылаются дважды, а папка автоимпорта обрабатывается параллельно.
+  const r = await withLock('corpvideo:maintenance', () => maintenanceBody(job, ctx));
+  if (r.ok) return r.value;
+  // Ручной запуск (с hourly/daily) не отбрасываем: повторим, когда освободится блокировка
+  if (job.payload?.hourly || job.payload?.daily) {
+    await enqueue('maintenance', job.payload, { dedupe: false, maxAttempts: 1, runAt: new Date(Date.now() + 30000) });
+    return { requeued: 'обслуживание занято другим воркером — повтор через 30 секунд' };
+  }
+  return { skipped: 'обслуживание уже выполняется другим воркером' };
+}
+
+async function maintenanceBody(job, ctx) {
   const s = await loadSettings(true);
   const out = {};
   // 1. Отложенная публикация

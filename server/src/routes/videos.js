@@ -13,7 +13,7 @@ import { enqueue } from '../lib/jobs.js';
 import { audit } from '../lib/audit.js';
 import { invalidateVideoCache } from './media.js';
 import { notify, notifyAdmins, notifySubscribersNewVideo } from '../lib/notify.js';
-import { randomToken } from '../lib/crypto.js';
+import { randomToken, sign, unsign } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { updateAssignmentProgress, assignmentsForUserVideo } from '../lib/assignments.js';
 import { toCsv, sendCsv } from '../lib/csv.js';
@@ -142,8 +142,13 @@ export default async function videoRoutes(app) {
     let key;
     if (req.user) key = `u:${req.user.id}`;
     else {
-      key = req.cookies?.cv_guest;
-      if (!key) { key = `g:${randomToken(12)}`; reply.setCookie('cv_guest', key, { path: '/', httpOnly: true, sameSite: 'lax', secure: config.cookieSecure, maxAge: 365 * 86400 }); }
+      // Cookie подписана: произвольное значение от клиента больше не даёт новый «сеанс» и новый просмотр
+      const signed = req.cookies?.cv_guest;
+      key = signed ? unsign(signed)?.g || null : null;
+      if (!key) {
+        key = `g:${randomToken(12)}`;
+        reply.setCookie('cv_guest', sign({ g: key }), { path: '/', httpOnly: true, sameSite: 'lax', secure: config.cookieSecure, maxAge: 365 * 86400 });
+      }
     }
     const pauseHistory = !!req.user?.prefs?.pauseHistory;
     const completed = Number(v.duration) > 0 && position >= Number(v.duration) * 0.95;

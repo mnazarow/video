@@ -4,6 +4,7 @@ import { one, query, many } from '../db.js';
 import { loadSettings } from './settings.js';
 import { config } from '../config.js';
 import { escapeHtml } from './util.js';
+import { randomToken } from './crypto.js';
 
 function apiUrl(s, method) {
   const base = String(s['telegram.api_url'] || 'https://api.telegram.org').replace(/\/+$/, '');
@@ -51,7 +52,7 @@ export async function telegramNotify(userId, { title, body = '', link = null, ty
 
 /** Код привязки для пользователя и ссылка на бота. */
 export async function createLinkCode(userId, s) {
-  const code = Math.random().toString(36).slice(2, 8).toUpperCase() + Math.random().toString(36).slice(2, 4).toUpperCase();
+  const code = randomToken(12).replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase();
   await query('UPDATE users SET telegram_link_code = $2 WHERE id = $1', [userId, code]);
   const bot = s['telegram.bot_username'] ? String(s['telegram.bot_username']).replace(/^@/, '') : '';
   return { code, botUsername: bot, url: bot ? `https://t.me/${bot}?start=${code}` : null };

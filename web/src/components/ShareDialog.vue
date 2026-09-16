@@ -4,6 +4,7 @@ import QRCode from 'qrcode';
 import Modal from './Modal.vue';
 import { useUi } from '../stores/ui.js';
 import { fmtDuration, parseTime } from '../utils/format.js';
+import { copyWithToast } from '../utils/clipboard.js';
 import ShareLinks from './studio/ShareLinks.vue';
 import { useAuth } from '../stores/auth.js';
 import { post } from '../api.js';
@@ -50,7 +51,7 @@ const embed = computed(() => {
   return `<iframe width="1280" height="720" src="${u}" title="${props.video.title.replace(/"/g, '&quot;')}" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
 });
 async function copy(text) {
-  try { await navigator.clipboard.writeText(text); ui.toast('Скопировано в буфер обмена', { type: 'success' }); } catch { ui.toast('Не удалось скопировать', { type: 'error' }); }
+  await copyWithToast(ui, text, 'Скопировано в буфер обмена');
 }
 async function makeQr() { try { qr.value = await QRCode.toDataURL(link.value, { width: 220, margin: 1, color: { dark: '#0F4382', light: '#ffffff' } }); } catch { qr.value = ''; } }
 watch(link, makeQr);

@@ -23,7 +23,9 @@ onMounted(() => { timer = setInterval(tick, 500); resolveEnd(); });
 onBeforeUnmount(() => clearInterval(timer));
 watch(() => props.video.id, () => { dismissed.value = new Set(); expanded.value = null; resolveEnd(); });
 
+let endSeq = 0;
 async function resolveEnd() {
+  const seq = ++endSeq;
   const es = props.video.endScreen; endItems.value = [];
   if (!es) return;
   const items = [];
@@ -36,7 +38,7 @@ async function resolveEnd() {
       else if (it.type === 'url') items.push({ ...it, title: it.title || it.target, sub: new URL(it.target).host, href: it.target });
     } catch { /* пропускаем недоступные элементы */ }
   }
-  endItems.value = items;
+  if (seq === endSeq) endItems.value = items;
 }
 function open(card) {
   if (card.type === 'url') { window.open(card.target, '_blank', 'noopener'); return; }

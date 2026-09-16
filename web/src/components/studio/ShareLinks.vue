@@ -4,6 +4,7 @@ import { ref, onMounted } from 'vue';
 import { get, post, patch, del } from '../../api.js';
 import { useUi } from '../../stores/ui.js';
 import { fmtDateTime, toLocalInput } from '../../utils/format.js';
+import { copyWithToast } from '../../utils/clipboard.js';
 
 const props = defineProps({ video: { type: Object, required: true }, compact: Boolean });
 const ui = useUi();
@@ -24,7 +25,7 @@ async function create() {
 }
 async function revoke(l, revoked) { const r = await patch(`/api/videos/${props.video.id}/share-links/${l.id}`, { revoked }); Object.assign(l, r.link); }
 async function remove(l) { if (!(await ui.ask({ title: 'Удалить ссылку?', message: 'Все, кто открыл видео по ней, потеряют доступ.', okLabel: 'Удалить', danger: true }))) return; await del(`/api/videos/${props.video.id}/share-links/${l.id}`); links.value = links.value.filter((x) => x.id !== l.id); }
-async function copy(t) { try { await navigator.clipboard.writeText(t); ui.toast('Ссылка скопирована', { type: 'success' }); } catch { /* ignore */ } }
+async function copy(t) { await copyWithToast(ui, t, 'Ссылка скопирована'); }
 function state(l) { if (l.revokedAt) return ['Отозвана', '']; if (l.expiresAt && new Date(l.expiresAt) < new Date()) return ['Истекла', 'warning']; if (l.maxViews != null && l.viewCount >= l.maxViews) return ['Лимит исчерпан', 'warning']; return ['Действует', 'success']; }
 </script>
 

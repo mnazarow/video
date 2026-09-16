@@ -63,6 +63,28 @@ export async function reapStaleJobs(staleMinutes = 5) {
   return rows;
 }
 
+/**
+ * Вернуть в очередь задания этого воркера, оставшиеся в статусе running (перезапуск, падение).
+ * ВАЖНО: попытку не «возвращаем» — задание с max_attempts = 1 (монтаж, клип) не должно
+ * выполниться второй раз: часть работы могла быть уже применена к видео.
+ */
+export async function requeueOwnJobs(workerId, { ids = null, staleSeconds = null } = {}) {
+  // ids — задания этого процесса (при остановке); staleSeconds — только давно не бившиеся (при старте):
+  // при нескольких воркерах с одинаковым WORKER_ID нельзя трогать то, что прямо сейчас выполняется у соседа.
+  const cond = []; const params = [workerId];
+  if (ids) { if (!ids.length) return []; params.push(ids.map(Number)); cond.push(`id = ANY($${params.length})`); }
+  if (staleSeconds != null) { params.push(String(staleSeconds)); cond.push(`heartbeat_at < now() - ($${params.length} || ' seconds')::interval`); }
+  const rows = await many(
+    `UPDATE jobs SET status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END,
+       error = CASE WHEN attempts < max_attempts THEN error ELSE trim(COALESCE(error, '') || ' [воркер остановлен во время выполнения]') END,
+       finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
+       locked_by = NULL, locked_at = NULL, run_at = now()
+     WHERE status = 'running' AND locked_by = $1${cond.length ? ' AND ' + cond.join(' AND ') : ''} RETURNING id, type, status`,
+    params,
+  );
+  return rows;
+}
+
 export async function retryJob(jobId) {
   return one(`UPDATE jobs SET status = 'queued', run_at = now(), error = NULL, attempts = 0, progress = 0 WHERE id = $1 AND status IN ('failed','cancelled') RETURNING *`, [jobId]);
 }

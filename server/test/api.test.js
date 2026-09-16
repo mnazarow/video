@@ -623,7 +623,20 @@ test('вход через SSO (OpenID Connect): обнаружение, PKCE, id
     // Неверный state → понятная ошибка
     const bad = await guest.req('GET', '/api/auth/oidc/callback?code=x&state=nope');
     assert.equal(bad.status, 302);
-    assert.match(decodeURIComponent(bad.headers.get('location')), /устарела/);
+    assert.match(decodeURIComponent(bad.headers.get('location')), /начните вход заново/);
+    // Код и state, полученные в чужом браузере, не должны завершать вход здесь (подмена сеанса)
+    const victim = new Client();
+    const start3 = await victim.req('GET', '/api/auth/oidc/start');
+    const p3 = await fetch(start3.headers.get('location'), { redirect: 'manual' });
+    const b3 = new URL(p3.headers.get('location'));
+    const stolen = await guest.req('GET', b3.pathname + b3.search);
+    assert.equal(stolen.status, 302);
+    assert.match(decodeURIComponent(stolen.headers.get('location')), /начните вход заново/, 'чужой code+state отклонён');
+    assert.equal((await guest.get('/api/auth/me')).json.user, null, 'вход не выполнен');
+    // А в своём браузере тот же ответ провайдера срабатывает
+    const own = await victim.req('GET', b3.pathname + b3.search);
+    assert.equal(own.status, 302, own.text);
+    assert.ok(!/error=/.test(own.headers.get('location')), own.headers.get('location'));
   } finally {
     srv.close();
     await admin.put('/api/admin/settings', { settings: { 'oidc.enabled': false } });
@@ -1201,6 +1214,49 @@ test('папка автоимпорта и пробный дайджест', asy
     fs.rmSync(dir, { recursive: true, force: true });
   }
   await user.del(`/api/videos/${editVideoId}`);
+});
+
+test('границы доступа после аудита: токены, секреты вебхуков, гонки монтажа, валидность лент', async () => {
+  // 1. API-токен не даёт доступа к администрированию, даже если владелец — администратор
+  const t = await admin.post('/api/me/tokens', { name: 'audit' });
+  assert.equal(t.status, 200, t.text);
+  const byToken = new Client();
+  const adminCall = await byToken.req('GET', '/api/admin/users?limit=1', null, { headers: { authorization: `Bearer ${t.json.token}` } });
+  assert.equal(adminCall.status, 403, 'админка недоступна по токену');
+  const meCall = await byToken.req('GET', '/api/auth/me', null, { headers: { authorization: `Bearer ${t.json.token}` } });
+  assert.equal(meCall.json.user?.role, 'admin', 'обычные вызовы по токену работают');
+
+  // 2. Секрет вебхука не возвращается в списке
+  const wh = await admin.post('/api/admin/webhooks', { name: 'audit', url: 'http://127.0.0.1:9/hook', events: [] });
+  const list = await admin.get('/api/admin/webhooks');
+  const row = list.json.webhooks.find((x) => x.id === wh.json.webhook.id);
+  assert.equal(row.secret, undefined, 'секрета нет в списке');
+  assert.ok(row.secretHint && row.secretHint.length <= 12, 'есть подсказка');
+  const sec = await admin.get(`/api/admin/webhooks/${wh.json.webhook.id}/secret`);
+  assert.equal(sec.json.secret, wh.json.webhook.secret, 'секрет отдаётся отдельным запросом');
+  await admin.del(`/api/admin/webhooks/${wh.json.webhook.id}`);
+
+  // 3. Одновременные запросы монтажа: принимается ровно один
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) > 3);
+  if (v) {
+    const rs = await Promise.all(Array.from({ length: 5 }, (_, i) => admin.post(`/api/videos/${v.id}/editor/trim`, { start: 0.2 + i * 0.01, end: Number(v.duration) - 0.5 })));
+    assert.equal(rs.filter((r) => r.status === 200).length, 1, 'принят один монтаж из пяти');
+    for (const r of rs) if (r.json?.jobId) await admin.post(`/api/admin/jobs/${r.json.jobId}/cancel`, {});
+    const bad = await admin.post(`/api/videos/${v.id}/editor/cut`, { cuts: [null] });
+    assert.equal(bad.status, 400, 'некорректные фрагменты — 400, а не 500');
+  }
+
+  // 4. Ленты остаются корректным XML (без повторного объявления пространства имён и управляющих символов)
+  const rss = await admin.get('/api/rss/latest?limit=5');
+  assert.equal(rss.status, 200, rss.text);
+  const rssTag = rss.text.match(/<rss[^>]*>/)[0];
+  assert.equal((rssTag.match(/xmlns:atom=/g) || []).length, 1, 'xmlns:atom объявлен один раз');
+  assert.ok(!/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(rss.text), 'нет управляющих символов');
+
+  // 5. Статика: выход за каталог assets запрещён
+  const trav = await guest.get('/assets/..%2Findex.html');
+  assert.equal(trav.status, 404, 'обход каталога закрыт');
 });
 
 test('удаление видео владельцем', async () => {

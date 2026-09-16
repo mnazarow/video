@@ -8,7 +8,9 @@ import { zipBuffer } from '../lib/zip.js';
 import { config } from '../config.js';
 import { requireEditable } from './videos.js';
 
-const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// Управляющие символы недопустимы в XML — иначе imsmanifest.xml не примет ни одна СДО.
+const XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const esc = (s) => String(s ?? '').replace(XML_FORBIDDEN, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function manifest12({ id, title }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -116,8 +118,12 @@ function indexHtml({ title, embedUrl, requiredPercent, siteName }) {
   if (ok) { var loc = parseFloat(s.getLocation()); if (loc > 0) startAt = loc; var prev = s.get('cmi.core.lesson_status', 'cmi.completion_status'); if (prev === 'completed' || prev === 'passed') done = true; if (!done) s.setStatus('incomplete'); s.commit(); }
   st.textContent = ok ? ('SCORM ' + s.version + ' · для зачёта нужно посмотреть ' + REQUIRED + '%') : 'LMS не найдена — прогресс не сохраняется';
   var url = ${JSON.stringify(embedUrl)};
+  var portalOrigin = (function () { try { return new URL(url, location.href).origin; } catch (err) { return null; } })();
   frame.src = url + (startAt ? '&t=' + Math.floor(startAt) : '');
   window.addEventListener('message', function (e) {
+    // Сообщения о прогрессе принимаем только от нашего плеера: иначе любая страница в СДО «зачла» бы курс
+    if (e.source !== frame.contentWindow) return;
+    if (portalOrigin && e.origin !== portalOrigin) return;
     var m = e.data || {};
     if (m.source !== 'corpvideo') return;
     if (m.event === 'progress' || m.event === 'ended') {

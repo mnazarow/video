@@ -16,7 +16,11 @@ const testResult = ref(null);
 const tab = computed(() => route.params.tab || 'general');
 const TABS = [['general', 'Общие', 'settings'], ['registration', 'Регистрация и безопасность', 'shield'], ['upload', 'Загрузка и обработка', 'upload'], ['comments', 'Комментарии', 'comment'], ['smtp', 'Почта (SMTP)', 'mail'], ['ldap', 'Active Directory / LDAP', 'lan'], ['sso', 'Вход через SSO (OIDC)', 'key'], ['asr', 'Автосубтитры (ASR)', 'robot'], ['ai', 'ИИ-помощник', 'sparkles'], ['learning', 'Обучение и аналитика', 'assignment'], ['integrations', 'Telegram и RAG', 'send'], ['webhooks', 'Вебхуки и xAPI', 'webhook'], ['tools', 'Редактор, OCR, ленты', 'scissors'], ['live', 'Трансляции', 'broadcast'], ['branding', 'Оформление', 'palette'], ['retention', 'Хранение данных', 'database']];
 
-async function load() { const r = await get('/api/admin/settings'); s.value = r.settings; }
+const loadError = ref('');
+async function load() {
+  try { const r = await get('/api/admin/settings'); s.value = r.settings; loadError.value = ''; }
+  catch (e) { loadError.value = e.message || 'Не удалось загрузить настройки'; ui.toast(loadError.value, { type: 'error' }); }
+}
 onMounted(load);
 async function save(keys) {
   saving.value = true;
@@ -75,7 +79,8 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
 <template>
   <div>
     <div class="page-head"><div><h1>Настройки</h1><div class="sub">Параметры портала. Изменения применяются сразу.</div></div></div>
-    <div v-if="!s" class="loading-block"><div class="spin"></div></div>
+    <div v-if="!s && loadError" class="panel"><p class="muted">{{ loadError }}</p><button class="btn" @click="load()"><Icon name="refresh" :size="16" /> Повторить</button></div>
+    <div v-else-if="!s" class="loading-block"><div class="spin"></div></div>
     <div v-else class="layout-with-nav">
       <nav class="side-nav"><router-link v-for="[k, l, ic] in TABS" :key="k" :to="`/admin/settings/${k}`" :class="{ 'router-link-active': tab === k }" active-class=""><Icon :name="ic" :size="20" /> {{ l }}</router-link></nav>
       <div class="col gap-24" style="min-width:0">

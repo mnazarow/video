@@ -4,6 +4,7 @@ import { get, post, patch, del } from '../../api.js';
 import { useUi } from '../../stores/ui.js';
 import { useAuth } from '../../stores/auth.js';
 import { fmtDateTime } from '../../utils/format.js';
+import { copyWithToast } from '../../utils/clipboard.js';
 
 const ui = useUi();
 const auth = useAuth();
@@ -19,7 +20,7 @@ async function toggleAuto(d) { await patch(`/api/admin/domains/${d.id}`, { autoA
 async function removeDomain(d) { if (await ui.ask({ title: `Удалить домен @${d.domain}?`, message: 'Новые пользователи с этого домена не смогут регистрироваться. Существующие учётные записи не затрагиваются.', okLabel: 'Удалить', danger: true })) { await del(`/api/admin/domains/${d.id}`); load(); } }
 async function sendInvite() { try { const r = await post('/api/admin/invites', invite.value); lastInvite.value = r; invite.value.email = ''; await load(); ui.toast(r.sent ? 'Приглашение отправлено' : 'Почта не настроена — передайте ссылку вручную', { type: r.sent ? 'success' : 'info' }); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
 async function revoke(i) { await del(`/api/admin/invites/${i.token}`); load(); }
-function copy(t) { navigator.clipboard.writeText(t); ui.toast('Скопировано'); }
+async function copy(t) { await copyWithToast(ui, t); }
 </script>
 
 <template>

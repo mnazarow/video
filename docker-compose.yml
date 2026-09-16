@@ -99,7 +99,8 @@ services:
       SSL_KEY: ${SSL_KEY_PATH:-/etc/corpvideo/ssl/privkey.pem}
       UPLOAD_CHUNK_LIMIT: 64m
     volumes:
-      - ${DATA_DIR:-/var/lib/corpvideo}:/data:ro
+      # Только медиафайлы: каталог данных целиком монтировать незачем — в нём лежат база и резервные копии
+      - ${DATA_DIR:-/var/lib/corpvideo}/media:/data/media:ro
       - ${DATA_DIR:-/var/lib/corpvideo}/ssl:/etc/corpvideo/ssl:ro
       - ${DATA_DIR:-/var/lib/corpvideo}/letsencrypt:/etc/letsencrypt:ro
       - ${DATA_DIR:-/var/lib/corpvideo}/certbot:/var/www/certbot:ro

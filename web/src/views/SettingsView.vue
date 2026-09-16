@@ -8,6 +8,7 @@ import { useUi } from '../stores/ui.js';
 import ChannelAvatar from '../components/ChannelAvatar.vue';
 import Modal from '../components/Modal.vue';
 import { fmtDateTime } from '../utils/format.js';
+import { copyWithToast } from '../utils/clipboard.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -70,7 +71,7 @@ async function loadTokens() { tokens.value = (await get('/api/me/tokens')).token
 async function createToken() { newToken.value = await post('/api/me/tokens', { name: tokenName.value, expiresDays: tokenDays.value }); tokenName.value = ''; loadTokens(); }
 async function removeToken(t) { if (await ui.ask({ title: 'Удалить токен?', message: `Интеграции, использующие «${t.name}», перестанут работать.`, okLabel: 'Удалить', danger: true })) { await del(`/api/me/tokens/${t.id}`); loadTokens(); } }
 watch(tab, (t) => { if (t === 'sessions') loadSessions(); if (t === 'tokens') loadTokens(); }, { immediate: true });
-function copy(t) { navigator.clipboard.writeText(t); ui.toast('Скопировано'); }
+async function copy(t) { await copyWithToast(ui, t); }
 </script>
 
 <template>

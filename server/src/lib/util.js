@@ -130,10 +130,21 @@ export function vttToText(vtt) {
   return String(vtt || '')
     .split('\n')
     .filter((l) => l && !/^WEBVTT/.test(l) && !/-->/.test(l) && !/^\d+$/.test(l) && !/^NOTE/.test(l))
-    .map((l) => l.replace(/<[^>]+>/g, ''))
     .join(' ')
+    .replace(/<[^>]+>/g, ' ')   // теги вырезаем после склейки: иначе тег, разорванный по строкам, уцелеет
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Фрагмент из ts_headline: PostgreSQL вставляет маркеры <b>…</b>, но окружающий текст отдаёт как есть.
+ * Экранируем всё и возвращаем только маркеры — результат безопасно выводить через v-html.
+ */
+export function safeHeadline(raw) {
+  const s = String(raw || '');
+  if (!s) return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/&lt;b&gt;/g, '<b>').replace(/&lt;\/b&gt;/g, '</b>');
 }
 
 export function pick(obj, keys) {

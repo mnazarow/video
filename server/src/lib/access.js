@@ -90,10 +90,10 @@ export function canViewLive(stream, user) {
 
 /** SQL-условие «видео видимо этому пользователю в списках» (без unlisted/private). */
 export function listVisibilitySql(user, alias = 'v') {
+  // ВАЖНО: результат оборачивается в скобки — иначе OR в соседнем условии (например `hd`) снимает фильтр видимости
   const base = `${alias}.deleted_at IS NULL AND ${alias}.status = 'ready' AND ${alias}.is_blocked = false AND ${alias}.moderation_status = 'approved' AND (${alias}.scheduled_at IS NULL OR ${alias}.scheduled_at <= now())`;
-  if (isStaff(user)) return `${base} AND ${alias}.visibility IN ('public','internal')`;
-  if (isActive(user)) return `${base} AND ${alias}.visibility IN ('public','internal')`;
-  return `${base} AND ${alias}.visibility = 'public'`;
+  const vis = isActive(user) || isStaff(user) ? `${alias}.visibility IN ('public','internal')` : `${alias}.visibility = 'public'`;
+  return `(${base} AND ${vis})`;
 }
 
 export function canUpload(user, settings) {

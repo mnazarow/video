@@ -91,6 +91,7 @@ info "ОС: $OS_NAME ($OS_FAMILY, $ARCH)"
 [ "$OS_FAMILY" != "unknown" ] || die "Поддерживаются Ubuntu/Debian и семейство RHEL (Rocky/Alma/CentOS/Fedora)"
 CV_VERSION="$(cat "$SOURCE_DIR/VERSION" 2>/dev/null || echo 1.0.0)"
 info "Версия CorpVideo: $CV_VERSION, исходники: $SOURCE_DIR"
+check_distribution "$SOURCE_DIR"
 if [ -f "$CV_CONF" ]; then
   load_conf
   warn "Обнаружена существующая установка ($MODE, $(env_get "$CV_CONF" INSTALLED_AT))."

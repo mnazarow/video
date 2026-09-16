@@ -31,6 +31,78 @@ ensure_mediamtx() {
   fi
 }
 
+# Последние строки лога в сообщении об ошибке: без них причина сбоя остаётся невидимой
+build_fail() { echo >&2; echo "${C_DIM}--- последние строки $CV_LOG ---${C_RESET}" >&2; tail -n 25 "$CV_LOG" 2>/dev/null >&2 || true; echo "${C_DIM}--- конец фрагмента ---${C_RESET}" >&2; die "$1"; }
+
+# Установка зависимостей с повтором: одна сетевая ошибка не должна прерывать установку или обновление портала
+npm_install_retry() { # $1 — подпись для лога, дальше аргументы npm
+  local label="$1"; shift
+  local try
+  for try in 1 2 3; do
+    if npm "$@" >>"$CV_LOG" 2>&1; then return 0; fi
+    warn "$label: попытка $try не удалась (сеть или registry) — повтор через 5 с"
+    sleep 5
+  done
+  return 1
+}
+
+# Зависимости и сборка. build_app <каталог приложения> [каталог дистрибутива с готовым web/dist]
+build_app() {
+  local app="$1" prebuilt="${2:-}"
+  local WEB_DEPS_OK=1 PREBUILT_WEB=0 mem_mb
+  step "Зависимости и сборка (несколько минут)"
+  # Долгие таймауты и повторы: в корпоративных сетях npm часто отваливается по ETIMEDOUT на середине установки
+  export NPM_CONFIG_FETCH_RETRIES="${NPM_CONFIG_FETCH_RETRIES:-5}"
+  export NPM_CONFIG_FETCH_RETRY_MINTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MINTIMEOUT:-20000}"
+  export NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT:-120000}"
+  export NPM_CONFIG_FETCH_TIMEOUT="${NPM_CONFIG_FETCH_TIMEOUT:-600000}"
+
+
+  info "Зависимости сервера…"
+  cd "$app/server"
+  npm_install_retry "npm ci (server)" ci --omit=dev --no-audit --no-fund \
+    || build_fail "Не удалось установить зависимости сервера — проверьте доступ к registry.npmjs.org (см. $CV_LOG)"
+
+  info "Зависимости веб-интерфейса…"
+  cd "$app/web"
+  WEB_DEPS_OK=1
+  if ! npm_install_retry "npm ci (web)" ci --no-audit --no-fund; then
+    # Отдельно пробуем npm install: он переживает и рассинхрон lock-файла, и пропажу optional-пакетов (@rollup/*, @esbuild/*)
+    warn "npm ci (web) не удался — пробуем npm install"
+    rm -rf node_modules
+    npm_install_retry "npm install (web)" install --no-audit --no-fund || WEB_DEPS_OK=0
+  fi
+  if [ "$WEB_DEPS_OK" = "0" ]; then
+    if [ -n "${prebuilt:-}" ] && [ -f "$prebuilt/index.html" ]; then
+      warn "Зависимости веб-интерфейса не скачались — берём готовый web/dist из дистрибутива"
+      rm -rf "$app/web/dist" && mkdir -p "$app/web" && cp -a "$prebuilt" "$app/web/dist"
+      PREBUILT_WEB=1
+    else
+      build_fail "Не удалось установить зависимости веб-интерфейса — проверьте доступ к registry.npmjs.org. Если доступа в интернет нет, соберите web/dist на машине с интернетом (cd web && npm ci && npm run build) и скопируйте каталог web/dist в $app/web/ (см. $CV_LOG)"
+    fi
+  fi
+
+  info "Сборка веб-интерфейса…"
+  # Сборке Vite нужно около 1 ГБ; на маленьких серверах ограничиваем кучу, чтобы не получить OOM-kill
+  mem_mb="$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [ "${mem_mb:-0}" -gt 0 ] && [ "$mem_mb" -lt 1400 ]; then
+    warn "Свободно всего ${mem_mb} МБ — сборка может не хватить памяти; при сбое добавьте swap (см. docs)"
+    export NODE_OPTIONS="--max-old-space-size=$(( mem_mb > 700 ? mem_mb - 200 : 512 ))"
+  fi
+  if [ "${PREBUILT_WEB:-0}" = "1" ]; then
+    ok "Взят готовый web/dist (сборка пропущена)"
+  elif ! npm run build >>"$CV_LOG" 2>&1; then
+    if tail -n 200 "$CV_LOG" 2>/dev/null | grep -qE "out of memory|Killed|ENOMEM"; then
+      build_fail "Сборке веб-интерфейса не хватило памяти. Добавьте swap: fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile — и запустите установку повторно"
+    fi
+    build_fail "Сборка веб-интерфейса не удалась (см. $CV_LOG)"
+  fi
+  [ -f "$app/web/dist/index.html" ] || build_fail "Веб-интерфейс не собран: нет web/dist/index.html (см. $CV_LOG)"
+  unset NODE_OPTIONS
+  rm -rf "$app/web/node_modules"
+  ok "Сервер и веб-интерфейс собраны"
+}
+
 cv_rollback() {
   systemctl stop corpvideo-api corpvideo-worker corpvideo-mediamtx 2>/dev/null || true
   warn "Установка не завершена. База данных и файлы в $CV_DATA_DIR сохранены; повторный запуск install.sh продолжит установку."
@@ -73,6 +145,9 @@ install_native() {
   step "Копирование приложения"
   if [ "$(cd "$SOURCE_DIR" && pwd)" != "$(cd "$CV_APP_DIR" && pwd)" ]; then
     rsync -a --delete --exclude '.env' --exclude 'node_modules' --exclude 'web/dist' --exclude 'server/data' --exclude '.git' --exclude '/mediamtx/' "$SOURCE_DIR/" "$CV_APP_DIR/"
+    # Готовый web/dist из дистрибутива не переносим сразу (он не должен затирать свежую сборку),
+    # но запоминаем путь: если npm не отработает, соберём портал из него, а не из старой установки.
+    [ -f "$SOURCE_DIR/web/dist/index.html" ] && CV_PREBUILT_DIST="$SOURCE_DIR/web/dist" || true
   fi
   ok "Исходники в $CV_APP_DIR"
 
@@ -112,11 +187,7 @@ EOF
     ok "Существующий $CV_ENV сохранён"
   fi
 
-  step "Зависимости и сборка (несколько минут)"
-  cd "$CV_APP_DIR/server" && npm ci --omit=dev --no-audit --no-fund >>"$CV_LOG" 2>&1 || die "npm ci (server) завершился с ошибкой — проверьте доступ к registry.npmjs.org"
-  cd "$CV_APP_DIR/web" && npm ci --no-audit --no-fund >>"$CV_LOG" 2>&1 && npm run build >>"$CV_LOG" 2>&1 || die "Сборка веб-интерфейса не удалась (см. $CV_LOG)"
-  rm -rf "$CV_APP_DIR/web/node_modules"
-  ok "Сервер и веб-интерфейс собраны"
+  build_app "$CV_APP_DIR" "${CV_PREBUILT_DIST:-}"
 
   step "Сервер трансляций MediaMTX"
   ensure_mediamtx

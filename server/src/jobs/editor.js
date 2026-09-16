@@ -33,6 +33,42 @@ export function invertCuts(cuts, duration) {
   return keep;
 }
 
+/** Точка в новой шкале: { at, cut } — cut означает, что исходное время попало в вырезанный кусок
+ *  и было привязано к началу следующего сохранённого отрезка. null — точка исчезла совсем. */
+function mapPoint(t, keep) {
+  let acc = 0;
+  for (const k of keep) {
+    if (t <= k.start) return { at: acc, cut: t < k.start };
+    if (t < k.end) return { at: acc + (t - k.start), cut: false };
+    acc += k.end - k.start;
+  }
+  return null;
+}
+
+/** Новое время точки после монтажа (null — точка вырезана вместе с концом ролика). */
+export function remapTime(t, keep) {
+  const p = mapPoint(t, keep);
+  return p ? p.at : null;
+}
+
+/** Пересчёт глав после монтажа: сдвиг, удаление вырезанных, склейка только реально совпавших. */
+export function remapChapters(chapters, keep) {
+  const src = (Array.isArray(chapters) ? chapters : []).map((c) => ({ ...c, start: Number(c.start) || 0 })).sort((a, b) => a.start - b.start);
+  const out = [];
+  for (const c of src) {
+    const p = mapPoint(c.start, keep);
+    if (!p) continue;
+    const at = Math.round(p.at * 10) / 10;
+    const last = out[out.length - 1];
+    // Две главы сливаются, только если хотя бы одна из них попала в вырез и они оказались в одной точке:
+    // главы, которых монтаж не коснулся, сохраняются даже если идут вплотную.
+    if (last && Math.abs(last.start - at) < 0.05 && (p.cut || last._cut)) out[out.length - 1] = { ...c, start: last.start, _cut: p.cut };
+    else out.push({ ...c, start: at, _cut: p.cut });
+  }
+  if (out.length && out[0].start > 0 && out[0].start < 1) out[0] = { ...out[0], start: 0 };
+  return out.map(({ _cut, ...c }) => c);
+}
+
 /** Аргументы ffmpeg для монтажа сохраняемых отрезков (точная перекодировка). */
 function editArgs(src, keep, meta, out, { vertical = false, crf = 18, preset = 'veryfast' } = {}) {
   const hasAudio = !!meta.hasAudio;
@@ -78,9 +114,9 @@ export async function runVideoEdit(job, ctx) {
     const filename = `${path.basename(video.original_filename || 'video', path.extname(video.original_filename || '')) || 'video'}-edit.mp4`;
     await pushHistory(video.id, { op: job.payload.op || 'edit', keep, removedSec: Math.round((duration - total) * 10) / 10, by: job.payload.byUserId || null });
     const v = await finalizeFile({ video, srcPath: tmp, filename, replace: true, priority: 1 });
-    // Сдвиг глав и таймкодов при обрезке начала: пересчитываем, если сохранён один отрезок
-    if (keep.length === 1 && keep[0].start > 0 && Array.isArray(video.chapters) && video.chapters.length) {
-      const shifted = video.chapters.map((c) => ({ ...c, start: Math.max(0, c.start - keep[0].start) })).filter((c) => c.start < total - 1);
+    // Пересчёт глав под новый таймлайн (для любого числа сохранённых отрезков, а не только для обрезки начала)
+    if (Array.isArray(video.chapters) && video.chapters.length) {
+      const shifted = remapChapters(video.chapters, keep).filter((c) => c.start < total - 1);
       await query('UPDATE videos SET chapters = $2::jsonb WHERE id = $1', [video.id, JSON.stringify(shifted)]);
     }
     if (job.payload.byUserId) await notify(job.payload.byUserId, { type: 'video_ready', title: 'Монтаж выполнен, видео обрабатывается', body: `${video.title}: удалено ${fmt(duration - total)} (${keep.length} ${keep.length === 1 ? 'фрагмент' : 'фрагментов'})`, link: `/studio/videos/${video.id}`, data: { videoId: video.id } });
