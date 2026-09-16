@@ -1,0 +1,26 @@
+[Unit]
+Description=CorpVideo API server
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=corpvideo
+Group=corpvideo
+WorkingDirectory=/opt/corpvideo/server
+EnvironmentFile=/etc/corpvideo/corpvideo.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+# Безопасность
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/corpvideo /var/log/corpvideo
+StandardOutput=append:/var/log/corpvideo/api.log
+StandardError=append:/var/log/corpvideo/api.log
+
+[Install]
+WantedBy=multi-user.target

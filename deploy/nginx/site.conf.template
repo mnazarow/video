@@ -1,0 +1,47 @@
+# CorpVideo — конфигурация сайта nginx (шаблон; подстановки: ${SERVER_NAME} ${API_UPSTREAM} ${MEDIAMTX_WEBRTC}
+# ${MEDIA_ROOT} ${WEB_ROOT} ${SSL_CERT} ${SSL_KEY} ${UPLOAD_CHUNK_LIMIT} ${LISTEN_HTTP2} ${HTTP2_DIRECTIVE}).
+# HTTP/2: для nginx >= 1.25.1 — «http2 on;», для более старых — параметр http2 в listen.
+# Блоки между маркерами удаляются скриптом рендера в зависимости от режима SSL.
+
+upstream corpvideo_api {
+  server ${API_UPSTREAM};
+  keepalive 64;
+}
+
+#--REDIRECT-START--
+server {
+  listen 80;
+  listen [::]:80;
+  server_name ${SERVER_NAME};
+  location /.well-known/acme-challenge/ { root /var/www/certbot; }
+  location / { return 301 https://$host$request_uri; }
+}
+#--REDIRECT-END--
+
+#--HTTPS-START--
+server {
+  listen 443 ssl${LISTEN_HTTP2};
+  listen [::]:443 ssl${LISTEN_HTTP2};
+  ${HTTP2_DIRECTIVE}
+  server_name ${SERVER_NAME};
+  ssl_certificate ${SSL_CERT};
+  ssl_certificate_key ${SSL_KEY};
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+  ssl_prefer_server_ciphers off;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_timeout 1d;
+  add_header Strict-Transport-Security "max-age=31536000" always;
+  include /etc/nginx/corpvideo-locations.conf;
+}
+#--HTTPS-END--
+
+#--HTTP-ONLY-START--
+server {
+  listen 80;
+  listen [::]:80;
+  server_name ${SERVER_NAME};
+  location /.well-known/acme-challenge/ { root /var/www/certbot; }
+  include /etc/nginx/corpvideo-locations.conf;
+}
+#--HTTP-ONLY-END--

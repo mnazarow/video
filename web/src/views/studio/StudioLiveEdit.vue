@@ -1,0 +1,213 @@
+<script setup>
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { get, patch, post, del } from '../../api.js';
+import { useAuth } from '../../stores/auth.js';
+import { useUi } from '../../stores/ui.js';
+import * as ws from '../../ws.js';
+import LiveChat from '../../components/LiveChat.vue';
+import LiveInteract from '../../components/LiveInteract.vue';
+import VideoPlayer from '../../components/player/VideoPlayer.vue';
+import EmptyState from '../../components/EmptyState.vue';
+import { VISIBILITY, toLocalInput, fmtNumber, timeAgo } from '../../utils/format.js';
+
+const route = useRoute();
+const router = useRouter();
+const auth = useAuth();
+const ui = useUi();
+const stream = ref(null);
+const error = ref(null);
+const showKey = ref(false);
+const form = ref({});
+const categories = ref([]);
+const tab = ref('setup');
+let off = [];
+
+async function load() {
+  try {
+    const s = await get(`/api/live/${route.params.id}`);
+    stream.value = s.stream;
+    form.value = { title: s.stream.title, description: s.stream.description, visibility: s.stream.visibility, categoryId: s.stream.categoryId || '', chatEnabled: s.stream.chatEnabled, record: s.stream.record, scheduledAt: toLocalInput(s.stream.scheduledAt), qaEnabled: s.stream.qaEnabled !== false, pollsEnabled: s.stream.pollsEnabled !== false };
+  } catch (e) { error.value = e; }
+}
+onMounted(async () => {
+  await load();
+  categories.value = (await get('/api/feed/categories')).categories;
+  off.push(ws.on('stream_status', (m) => { if (stream.value && m.streamId === stream.value.id) load(); }), ws.on('live.started', load), ws.on('live.ended', load));
+});
+onBeforeUnmount(() => { off.forEach((f) => f()); stopBrowser(); });
+
+async function save() { try { const r = await patch(`/api/studio/live/${stream.value.id}`, { ...form.value, categoryId: form.value.categoryId || null, scheduledAt: form.value.scheduledAt ? new Date(form.value.scheduledAt).toISOString() : null }); await patch(`/api/studio/live/${stream.value.id}/interact`, { qaEnabled: form.value.qaEnabled, pollsEnabled: form.value.pollsEnabled }); stream.value = { ...stream.value, ...r.stream, qaEnabled: form.value.qaEnabled, pollsEnabled: form.value.pollsEnabled }; ui.toast('Сохранено', { type: 'success' }); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
+async function resetKey() { if (!(await ui.ask({ title: 'Сменить ключ трансляции?', message: 'Старый ключ перестанет работать — обновите настройки в OBS.', okLabel: 'Сменить' }))) return; const r = await post(`/api/studio/live/${stream.value.id}/reset-key`, {}); await load(); ui.toast('Ключ обновлён'); }
+async function endStream() { if (!(await ui.ask({ title: 'Завершить эфир?', message: 'Зрители будут отключены. Если включена запись, она будет обработана и опубликована.', okLabel: 'Завершить', danger: true }))) return; await post(`/api/studio/live/${stream.value.id}/end`, {}); stopBrowser(); load(); }
+async function reopen() { await patch(`/api/studio/live/${stream.value.id}`, { status: 'idle' }); load(); }
+async function remove() { if (!(await ui.ask({ title: 'Удалить трансляцию?', message: 'Запись эфира (если есть) останется на канале.', okLabel: 'Удалить', danger: true }))) return; await del(`/api/studio/live/${stream.value.id}`); router.push('/studio/live'); }
+function copy(t) { navigator.clipboard.writeText(t); ui.toast('Скопировано'); }
+
+// --- Эфир из браузера (WHIP / WebRTC) ---------------------------------------------
+const browserState = ref('idle'); // idle | preview | live | error
+const browserError = ref('');
+const source = ref('camera');
+const preview = ref(null);
+const quality = ref('720');
+let mediaStream = null; let pc = null; let whipLocation = null;
+const devices = ref({ cams: [], mics: [] });
+const sel = ref({ cam: '', mic: '' });
+async function listDevices() { try { const d = await navigator.mediaDevices.enumerateDevices(); devices.value = { cams: d.filter((x) => x.kind === 'videoinput'), mics: d.filter((x) => x.kind === 'audioinput') }; } catch { /* ignore */ } }
+async function startPreview() {
+  browserError.value = '';
+  try {
+    stopMedia();
+    const q = { '1080': { width: 1920, height: 1080 }, '720': { width: 1280, height: 720 }, '480': { width: 854, height: 480 } }[quality.value];
+    if (source.value === 'screen') {
+      mediaStream = await navigator.mediaDevices.getDisplayMedia({ video: { ...q, frameRate: 30 }, audio: true });
+      try { const mic = await navigator.mediaDevices.getUserMedia({ audio: sel.value.mic ? { deviceId: { exact: sel.value.mic } } : true }); for (const t of mic.getAudioTracks()) mediaStream.addTrack(t); } catch { /* без микрофона */ }
+    } else {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ video: { ...q, frameRate: 30, deviceId: sel.value.cam ? { exact: sel.value.cam } : undefined }, audio: sel.value.mic ? { deviceId: { exact: sel.value.mic } } : true });
+    }
+    mediaStream.getVideoTracks()[0]?.addEventListener('ended', () => { if (browserState.value === 'live') stopBrowser(); });
+    preview.value.srcObject = mediaStream;
+    browserState.value = 'preview';
+    listDevices();
+  } catch (e) { browserError.value = e.message || 'Не удалось получить доступ к камере/экрану'; browserState.value = 'error'; }
+}
+async function goLive() {
+  if (!mediaStream) return;
+  browserError.value = '';
+  try {
+    pc = new RTCPeerConnection({ iceServers: [] });
+    for (const track of mediaStream.getTracks()) {
+      const transceiver = pc.addTransceiver(track, { direction: 'sendonly' });
+      const sender = transceiver.sender;
+      if (track.kind === 'video') {
+        // HLS для зрителей умеет H.264 / VP9 / AV1, но не VP8 (кодек WebRTC по умолчанию) —
+        // просим браузер кодировать в H.264 (Chrome, Edge, Safari, Firefox), иначе VP9, затем AV1
+        try {
+          const caps = RTCRtpSender.getCapabilities?.('video');
+          if (caps && transceiver.setCodecPreferences) {
+            const rank = (c) => { const m = c.mimeType.toLowerCase(); if (m === 'video/h264') return /packetization-mode=1/.test(c.sdpFmtpLine || '') ? 0 : 1; if (m === 'video/vp9') return 2; if (m === 'video/av1') return 3; if (m === 'video/vp8') return 5; return 4; };
+            transceiver.setCodecPreferences([...caps.codecs].sort((a, b) => rank(a) - rank(b)));
+          }
+        } catch { /* оставляем кодек по умолчанию */ }
+        const p = sender.getParameters(); p.encodings = [{ maxBitrate: { '1080': 5_000_000, '720': 2_800_000, '480': 1_400_000 }[quality.value] }]; sender.setParameters(p).catch(() => {});
+      }
+    }
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await new Promise((r) => { if (pc.iceGatheringState === 'complete') return r(); const t = setTimeout(r, 2000); pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); r(); } }); });
+    const url = stream.value.ingest.whipUrl;
+    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/sdp' }, body: pc.localDescription.sdp });
+    if (!res.ok) throw new Error(`Сервер трансляций ответил ${res.status}. Проверьте, что WebRTC-порты открыты.`);
+    whipLocation = res.headers.get('location');
+    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+    pc.addEventListener('connectionstatechange', () => { if (['failed', 'disconnected', 'closed'].includes(pc.connectionState) && browserState.value === 'live') { browserError.value = 'Соединение с сервером потеряно'; browserState.value = 'preview'; } });
+    browserState.value = 'live';
+    ui.toast('Вы в эфире!', { type: 'success' });
+  } catch (e) { browserError.value = e.message; try { pc?.close(); } catch { /* ignore */ } pc = null; }
+}
+function stopMedia() { if (mediaStream) { for (const t of mediaStream.getTracks()) t.stop(); mediaStream = null; } if (preview.value) preview.value.srcObject = null; }
+async function stopBrowser() {
+  if (pc) { try { pc.close(); } catch { /* ignore */ } pc = null; }
+  if (whipLocation) { try { await fetch(new URL(whipLocation, stream.value?.ingest?.whipUrl || location.origin), { method: 'DELETE' }); } catch { /* ignore */ } whipLocation = null; }
+  stopMedia();
+  browserState.value = 'idle';
+}
+const whipSupported = computed(() => !!(navigator.mediaDevices && window.RTCPeerConnection) && auth.config?.whipEnabled);
+</script>
+
+<template>
+  <div v-if="error"><EmptyState icon="broadcast" title="Трансляция не найдена" :text="error.message" /></div>
+  <div v-else-if="stream">
+    <div class="row mb-16"><router-link to="/studio/live" class="btn ghost sm"><Icon name="back" :size="18" /> Трансляции</router-link></div>
+    <div class="page-head">
+      <div><h1 style="font-family: var(--font-body); text-transform: none; font-size: 26px; letter-spacing: 0">{{ stream.title }}</h1>
+        <div class="row wrap gap-8 mt-8"><span class="badge" :class="stream.status === 'live' ? 'live' : stream.status === 'ended' ? '' : 'brand'">{{ { idle: 'Готова к эфиру', live: 'В эфире', ended: 'Завершена' }[stream.status] }}</span><span v-if="stream.status === 'live'" class="small muted"><Icon name="eye" :size="14" style="vertical-align:-2px" /> {{ fmtNumber(stream.viewerCount) }} зрителей • {{ timeAgo(stream.startedAt) }}<span v-if="stream.sourceProtocol"> • {{ stream.sourceProtocol.toUpperCase() }}</span></span></div></div>
+      <div class="actions"><router-link :to="`/live/${stream.shortId}`" class="btn" target="_blank"><Icon name="openNew" :size="16" /> Страница эфира</router-link><button v-if="stream.status === 'live'" class="btn danger primary" @click="endStream"><Icon name="stop" :size="18" /> Завершить эфир</button><button v-else-if="stream.status === 'ended'" class="btn" @click="reopen"><Icon name="replay" :size="18" /> Открыть заново</button></div>
+    </div>
+    <div class="tabs mb-24"><button class="tab" :class="{ active: tab === 'setup' }" @click="tab = 'setup'">Подключение</button><button class="tab" :class="{ active: tab === 'browser' }" @click="tab = 'browser'" v-if="whipSupported">Эфир из браузера</button><button class="tab" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">Настройки</button><button class="tab" :class="{ active: tab === 'chat' }" @click="tab = 'chat'">Чат и просмотр</button><button class="tab" :class="{ active: tab === 'interact' }" @click="tab = 'interact'">Опросы и вопросы</button></div>
+
+    <div v-if="tab === 'setup'" class="two-col">
+      <div class="col gap-24">
+        <div class="panel">
+          <h3 class="mb-8">OBS Studio / RTMP</h3>
+          <p class="small muted">В OBS: Настройки → Вещание → Сервис «Другой…». Рекомендуемые параметры: 1080p30, кодек x264/NVENC, битрейт 4000–6000 кбит/с, интервал ключевых кадров 2 с.</p>
+          <div class="field mb-8"><label>Сервер</label><div class="code-box"><span>{{ stream.ingest?.rtmpUrl || 'Адрес RTMP не настроен администратором' }}</span><button class="ibtn sm" @click="copy(stream.ingest?.rtmpUrl)"><Icon name="copy" :size="16" /></button></div></div>
+          <div class="field"><label>Ключ потока</label><div class="code-box"><span>{{ showKey ? stream.streamKey : '•'.repeat(24) }}</span><button class="ibtn sm" @click="showKey = !showKey"><Icon :name="showKey ? 'eyeOff' : 'eye'" :size="16" /></button><button class="ibtn sm" @click="copy(stream.streamKey)"><Icon name="copy" :size="16" /></button></div><div class="hint">Никому не сообщайте ключ — любой, кто его знает, сможет вещать от вашего имени.</div></div>
+          <div class="row wrap mt-16"><button class="btn sm" :disabled="stream.status === 'live'" @click="resetKey"><Icon name="refresh" :size="16" /> Сменить ключ</button></div>
+        </div>
+        <div class="panel" v-if="stream.ingest?.srtUrl">
+          <h3 class="mb-8">SRT</h3><p class="small muted">Для профессиональных кодеров и OBS с нестабильными каналами (режим caller).</p>
+          <div class="code-box"><span>{{ stream.ingest.srtUrl }}</span><button class="ibtn sm" @click="copy(stream.ingest.srtUrl)"><Icon name="copy" :size="16" /></button></div>
+        </div>
+      </div>
+      <div class="panel soft">
+        <h3 class="mb-8">Как это работает</h3>
+        <ol class="small" style="padding-left: 18px; line-height: 1.7">
+          <li>Заполните название и описание, выберите видимость.</li>
+          <li>Скопируйте сервер и ключ в OBS (или откройте вкладку «Эфир из браузера»).</li>
+          <li>Нажмите «Начать трансляцию» в OBS — статус здесь изменится на «В эфире» автоматически, подписчики получат уведомление.</li>
+          <li>Зрители смотрят эфир с задержкой 5–15 секунд и общаются в чате.</li>
+          <li>После остановки вещания эфир завершится сам. Запись появится на канале через несколько минут.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div v-else-if="tab === 'browser'" class="two-col">
+      <div class="panel">
+        <h3 class="mb-8">Эфир из браузера</h3>
+        <p class="small muted">Без установки программ: камера с микрофоном или демонстрация экрана. Работает в Chrome, Edge, Firefox и Safari.</p>
+        <div class="browser-preview"><video ref="preview" autoplay muted playsinline></video><div v-if="browserState === 'idle'" class="bp-empty"><Icon name="webcam" :size="40" /><div class="small">Выберите источник и нажмите «Проверить»</div></div><span v-if="browserState === 'live'" class="badge live" style="position:absolute;top:10px;left:10px">В эфире</span></div>
+        <div class="row wrap mt-16">
+          <select class="select" v-model="source" style="width: 200px" :disabled="browserState === 'live'"><option value="camera">Камера + микрофон</option><option value="screen">Экран + микрофон</option></select>
+          <select class="select" v-model="quality" style="width: 140px" :disabled="browserState === 'live'"><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option></select>
+          <select v-if="devices.cams.length && source === 'camera'" class="select" v-model="sel.cam" style="width: 220px" :disabled="browserState === 'live'"><option value="">Камера по умолчанию</option><option v-for="d in devices.cams" :key="d.deviceId" :value="d.deviceId">{{ d.label || 'Камера' }}</option></select>
+          <select v-if="devices.mics.length" class="select" v-model="sel.mic" style="width: 220px" :disabled="browserState === 'live'"><option value="">Микрофон по умолчанию</option><option v-for="d in devices.mics" :key="d.deviceId" :value="d.deviceId">{{ d.label || 'Микрофон' }}</option></select>
+        </div>
+        <div v-if="browserError" class="alert danger mt-16"><Icon name="alertCircle" :size="18" /> {{ browserError }}</div>
+        <div class="row wrap mt-16">
+          <button v-if="browserState !== 'live'" class="btn" @click="startPreview"><Icon name="camera" :size="18" /> {{ browserState === 'preview' ? 'Переподключить источник' : 'Проверить' }}</button>
+          <button v-if="browserState === 'preview'" class="btn primary" @click="goLive"><Icon name="broadcast" :size="18" /> Выйти в эфир</button>
+          <button v-if="browserState === 'live'" class="btn danger primary" @click="stopBrowser"><Icon name="stop" :size="18" /> Остановить</button>
+          <button v-if="browserState === 'preview'" class="btn ghost" @click="stopBrowser">Отмена</button>
+        </div>
+      </div>
+      <div class="panel soft small"><h3 class="mb-8">Советы</h3><p>Не закрывайте вкладку во время эфира. Для демонстрации экрана выберите окно или весь экран и включите «Поделиться звуком», если нужен звук приложения. Проводное подключение к сети даст стабильную картинку.</p></div>
+    </div>
+
+    <div v-else-if="tab === 'settings'" class="panel">
+      <div class="form-grid">
+        <div class="field" style="grid-column: 1 / -1"><label>Название</label><input class="input" v-model="form.title" maxlength="150" /></div>
+        <div class="field" style="grid-column: 1 / -1"><label>Описание</label><textarea class="textarea" v-model="form.description"></textarea></div>
+        <div class="field"><label>Видимость</label><select class="select" v-model="form.visibility"><option v-for="(v, k) in VISIBILITY" :key="k" :value="k">{{ v.label }}</option></select></div>
+        <div class="field"><label>Категория</label><select class="select" v-model="form.categoryId"><option value="">Без категории</option><option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
+        <div class="field"><label>Запланировано на</label><input class="input" type="datetime-local" v-model="form.scheduledAt" /></div>
+        <div class="field" style="justify-content: flex-end; gap: 12px"><label class="switch"><input type="checkbox" v-model="form.chatEnabled" /><span class="track"></span><span>Чат зрителей</span></label><label class="switch"><input type="checkbox" v-model="form.record" /><span class="track"></span><span>Записывать эфир</span></label></div>
+        <div class="field" style="grid-column: 1 / -1; flex-direction: row; gap: 24px; flex-wrap: wrap"><label class="switch"><input type="checkbox" v-model="form.qaEnabled" /><span class="track"></span><span>Вопросы спикеру (Q&amp;A с голосованием)</span></label><label class="switch"><input type="checkbox" v-model="form.pollsEnabled" /><span class="track"></span><span>Опросы зрителей</span></label><span class="small muted">Запланированный эфир: зрители могут включить напоминание и добавить событие в календарь (.ics)</span></div>
+      </div>
+      <div class="form-actions"><button class="btn primary" @click="save">Сохранить</button><button class="btn ghost danger" :disabled="stream.status === 'live'" @click="remove">Удалить трансляцию</button></div>
+    </div>
+
+    <div v-else-if="tab === 'chat'" class="two-col">
+      <div><VideoPlayer v-if="stream.status === 'live'" :src="stream.hlsUrl" live compact :allow-theater="false" :allow-mini="false" muted /><div v-else class="player live-placeholder" style="display:flex;align-items:center;justify-content:center;color:#fff">Эфир не идёт</div></div>
+      <div style="height: 520px"><LiveChat :stream="stream" /></div>
+    </div>
+
+    <div v-else class="two-col">
+      <div class="panel" style="height: 560px; display:flex; flex-direction:column"><LiveInteract :stream="stream" manage /></div>
+      <div class="panel soft small col gap-8">
+        <h3 class="mb-4">Как вести интерактив</h3>
+        <p><b>Вопросы.</b> Зрители задают вопросы (в том числе анонимно) и голосуют за чужие — самые важные поднимаются выше. Отмечайте отвеченные и при желании пишите ответ текстом, скрывайте неуместные. После эфира список можно выгрузить в CSV.</p>
+        <p><b>Опросы.</b> Создайте вопрос с вариантами (один или несколько ответов) — он появится у всех зрителей мгновенно. Результаты видны всем (или только вам, если скрыть). Завершите опрос, чтобы зафиксировать итоги.</p>
+        <a class="btn sm" :href="`/api/live/${stream.shortId}/questions/export`"><Icon name="csv" :size="16" /> Экспорт вопросов CSV</a>
+        <div style="height: 300px"><LiveChat :stream="stream" /></div>
+      </div>
+    </div>
+  </div>
+  <div v-else class="loading-block"><div class="spin"></div></div>
+</template>
+
+<style>
+.browser-preview { position: relative; aspect-ratio: 16/9; background: #000; border-radius: var(--radius); overflow: hidden; }
+.browser-preview video { width: 100%; height: 100%; object-fit: contain; }
+.bp-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: rgba(255,255,255,0.7); }
+</style>

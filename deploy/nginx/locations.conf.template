@@ -1,0 +1,127 @@
+# CorpVideo — общие location'ы (подключаются в server{} для HTTP и HTTPS).
+# Подстановки: ${API_UPSTREAM} ${MEDIAMTX_WEBRTC} ${MEDIA_ROOT} ${WEB_ROOT} ${UPLOAD_CHUNK_LIMIT}
+
+root ${WEB_ROOT};
+client_max_body_size 8m;
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header Connection "";
+proxy_read_timeout 120s;
+
+# --- Медиафайлы (HLS-сегменты, миниатюры, оригиналы) с проверкой прав в API ------------------
+location /media/ {
+  auth_request /api/media/auth;
+  alias ${MEDIA_ROOT}/;
+  sendfile on;
+  tcp_nopush on;
+  add_header Cache-Control $corpvideo_media_cache;
+  add_header Accept-Ranges bytes;
+  types {
+    application/vnd.apple.mpegurl m3u8;
+    video/mp2t ts;
+    video/mp4 mp4 m4v;
+    video/iso.segment m4s;
+    text/vtt vtt;
+    image/jpeg jpg jpeg;
+    image/png png;
+    image/webp webp;
+    image/svg+xml svg;
+    video/x-matroska mkv;
+    video/quicktime mov;
+    video/webm webm;
+    audio/mpeg mp3;
+  }
+}
+
+location = /api/media/auth {
+  internal;
+  proxy_pass http://corpvideo_api;
+  proxy_pass_request_body off;
+  proxy_set_header Content-Length "";
+  proxy_set_header X-Original-URI $request_uri;
+  proxy_set_header Cookie $http_cookie;
+  proxy_set_header Authorization $http_authorization;
+}
+
+# Скачивание оригиналов через X-Accel-Redirect
+location /internal-media/ {
+  internal;
+  alias ${MEDIA_ROOT}/;
+}
+
+# --- Загрузка видео: чанки и простая загрузка ---------------------------------------------------
+location /api/uploads/simple {
+  client_max_body_size 0;
+  proxy_request_buffering off;
+  proxy_read_timeout 3600s;
+  proxy_send_timeout 3600s;
+  proxy_pass http://corpvideo_api;
+}
+location /api/uploads/ {
+  client_max_body_size ${UPLOAD_CHUNK_LIMIT};
+  proxy_request_buffering off;
+  proxy_read_timeout 600s;
+  proxy_send_timeout 600s;
+  proxy_pass http://corpvideo_api;
+}
+
+# --- HLS прямых трансляций (проксируется через API с проверкой прав) -------------------------------
+location ~ ^/api/live/[^/]+/hls/ {
+  proxy_buffering off;
+  proxy_cache off;
+  proxy_pass http://corpvideo_api;
+}
+
+# --- API ----------------------------------------------------------------------------------------------
+location /api/ {
+  proxy_set_header X-Accel-Supported 1;
+  proxy_pass http://corpvideo_api;
+}
+
+# --- WebSocket ------------------------------------------------------------------------------------------
+location = /ws {
+  proxy_pass http://corpvideo_api;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection $connection_upgrade;
+  proxy_read_timeout 3600s;
+}
+
+# --- WHIP (эфир из браузера): сигналинг WebRTC на MediaMTX -----------------------------------------------
+location /whip/ {
+  proxy_pass http://${MEDIAMTX_WEBRTC}/;
+  proxy_set_header Connection "";
+  proxy_buffering off;
+}
+
+# --- Статика веб-интерфейса ----------------------------------------------------------------------------
+location /assets/ {
+  expires 1y;
+  add_header Cache-Control "public, max-age=31536000, immutable";
+  try_files $uri =404;
+}
+location ~* ^/(favicon\.svg|favicon\.ico|logo\.svg|og-default\.png|robots\.txt)$ {
+  expires 1d;
+  try_files $uri =404;
+}
+location /fonts/ {
+  expires 30d;
+  try_files $uri =404;
+}
+location /icons/ {
+  expires 30d;
+  try_files $uri =404;
+}
+# PWA: service worker всегда свежий; манифест генерирует API (название портала из настроек)
+location = /sw.js {
+  add_header Cache-Control "no-cache";
+  add_header Service-Worker-Allowed "/";
+  try_files $uri =404;
+}
+
+# Страницы SPA: отдаёт API (подставляет мета-теги и настройки)
+location / {
+  proxy_pass http://corpvideo_api;
+}

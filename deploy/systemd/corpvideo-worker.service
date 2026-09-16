@@ -1,0 +1,27 @@
+[Unit]
+Description=CorpVideo background worker (ffmpeg, subtitles, mail)
+After=network.target postgresql.service corpvideo-api.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=corpvideo
+Group=corpvideo
+WorkingDirectory=/opt/corpvideo/server
+EnvironmentFile=/etc/corpvideo/corpvideo.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node src/worker.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=40
+LimitNOFILE=65536
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/corpvideo /var/log/corpvideo
+StandardOutput=append:/var/log/corpvideo/worker.log
+StandardError=append:/var/log/corpvideo/worker.log
+
+[Install]
+WantedBy=multi-user.target

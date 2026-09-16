@@ -1,0 +1,115 @@
+// Правила доступа: кто что может видеть и делать.
+import { one } from '../db.js';
+
+export const isStaff = (user) => !!user && (user.role === 'admin' || user.role === 'moderator');
+export const isAdmin = (user) => !!user && user.role === 'admin';
+export const isActive = (user) => !!user && user.status === 'active';
+
+/**
+ * Может ли пользователь (или гость) смотреть видео.
+ * Учитывает видимость, статус модерации, блокировку, удаление и персональный доступ.
+ */
+export async function canViewVideo(video, user, shareTokens = null) {
+  if (!video || video.deleted_at) return false;
+  const owner = user && user.id === video.owner_id;
+  if (owner || isStaff(user)) return true;
+  if (video.is_blocked) return false;
+  if (video.moderation_status !== 'approved') return false;
+  if (video.scheduled_at && new Date(video.scheduled_at) > new Date()) return false;
+  switch (video.visibility) {
+    case 'public':
+    case 'unlisted':
+      return true;
+    case 'internal':
+      if (isActive(user)) return true;
+      return shareLinkAllows(video.id, shareTokens);
+    case 'private': {
+      if (!isActive(user)) return shareLinkAllows(video.id, shareTokens);
+      if (await hasPrivateAccess(video.id, user.id)) return true;
+      return shareLinkAllows(video.id, shareTokens);
+    }
+    default:
+      return false;
+  }
+}
+
+/** Персональный доступ, доступ через группу или через назначение «к просмотру». */
+export async function hasPrivateAccess(videoId, userId) {
+  const row = await one(
+    `SELECT 1 WHERE EXISTS (SELECT 1 FROM video_access WHERE video_id = $1 AND user_id = $2)
+        OR EXISTS (SELECT 1 FROM video_group_access ga JOIN group_members gm ON gm.group_id = ga.group_id WHERE ga.video_id = $1 AND gm.user_id = $2)
+        OR EXISTS (
+          SELECT 1 FROM assignments a JOIN assignment_targets t ON t.assignment_id = a.id
+          WHERE a.status = 'active' AND (a.video_id = $1 OR a.playlist_id IN (SELECT playlist_id FROM playlist_items WHERE video_id = $1))
+            AND (t.target_type = 'all' OR t.user_id = $2 OR (t.target_type = 'group' AND t.group_id IN (SELECT group_id FROM group_members WHERE user_id = $2))))`,
+    [videoId, userId],
+  );
+  return !!row;
+}
+
+/** Действующая защищённая ссылка (токен из cookie cv_share) на это видео: строка share_links или null. */
+export async function shareLinkFor(videoId, tokens) {
+  if (!tokens || !tokens.length) return null;
+  // view_count учитывается при открытии ссылки (unlock); уже открывший её зритель продолжает смотреть
+  return one(
+    `SELECT * FROM share_links WHERE video_id = $1 AND token = ANY($2::text[]) AND revoked_at IS NULL
+       AND (expires_at IS NULL OR expires_at > now()) AND (max_views IS NULL OR view_count <= max_views) ORDER BY allow_download DESC LIMIT 1`,
+    [videoId, tokens],
+  );
+}
+export async function shareLinkAllows(videoId, tokens) {
+  return !!(await shareLinkFor(videoId, tokens));
+}
+
+export function canAssign(user, settings) {
+  if (!isActive(user)) return false;
+  if (isStaff(user)) return true;
+  return settings?.['assignments.who_can_assign'] === 'all';
+}
+
+export function canEditVideo(video, user) {
+  if (!user || !video) return false;
+  return user.id === video.owner_id || isStaff(user);
+}
+
+export function canViewPlaylist(pl, user) {
+  if (!pl) return false;
+  if (user && (user.id === pl.owner_id || isStaff(user))) return true;
+  if (pl.visibility === 'public' || pl.visibility === 'unlisted') return true;
+  if (pl.visibility === 'internal') return isActive(user);
+  return false;
+}
+
+export function canViewLive(stream, user) {
+  if (!stream) return false;
+  if (user && (user.id === stream.owner_id || isStaff(user))) return true;
+  if (stream.visibility === 'public' || stream.visibility === 'unlisted') return true;
+  if (stream.visibility === 'internal') return isActive(user);
+  return false;
+}
+
+/** SQL-условие «видео видимо этому пользователю в списках» (без unlisted/private). */
+export function listVisibilitySql(user, alias = 'v') {
+  const base = `${alias}.deleted_at IS NULL AND ${alias}.status = 'ready' AND ${alias}.is_blocked = false AND ${alias}.moderation_status = 'approved' AND (${alias}.scheduled_at IS NULL OR ${alias}.scheduled_at <= now())`;
+  if (isStaff(user)) return `${base} AND ${alias}.visibility IN ('public','internal')`;
+  if (isActive(user)) return `${base} AND ${alias}.visibility IN ('public','internal')`;
+  return `${base} AND ${alias}.visibility = 'public'`;
+}
+
+export function canUpload(user, settings) {
+  if (!isActive(user)) return false;
+  const who = settings['upload.who_can_upload'];
+  if (isAdmin(user)) return true;
+  if (who === 'admins') return false;
+  if (who === 'allowed') return !!user.can_upload;
+  return user.can_upload !== false;
+}
+
+export function canStream(user, settings) {
+  if (!isActive(user) || !settings['live.enabled']) return false;
+  const who = settings['live.who_can_stream'];
+  if (isAdmin(user)) return true;
+  if (who === 'admins') return false;
+  if (who === 'allowed') return !!user.can_stream;
+  return user.can_stream !== false;
+}

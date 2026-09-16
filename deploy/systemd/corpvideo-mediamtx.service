@@ -1,0 +1,22 @@
+[Unit]
+Description=CorpVideo live streaming server (MediaMTX)
+After=network.target corpvideo-api.service
+
+[Service]
+Type=simple
+User=corpvideo
+Group=corpvideo
+WorkingDirectory=/opt/corpvideo/mediamtx
+ExecStart=/opt/corpvideo/mediamtx/mediamtx /etc/corpvideo/mediamtx.yml
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/corpvideo /var/log/corpvideo
+StandardOutput=append:/var/log/corpvideo/mediamtx.log
+StandardError=append:/var/log/corpvideo/mediamtx.log
+
+[Install]
+WantedBy=multi-user.target

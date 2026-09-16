@@ -1,0 +1,13 @@
+# не попадает в контекст сборки Docker
+.git
+node_modules
+**/node_modules
+web/dist
+server/data
+server/.env
+.env
+mediamtx/
+deploy/mediamtx/mediamtx.yml
+docs/
+*.log
+*.tar.gz

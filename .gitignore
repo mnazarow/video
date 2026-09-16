@@ -1,0 +1,17 @@
+# зависимости и сборка
+node_modules/
+web/dist/
+# данные и секреты
+server/data/
+server/.env
+.env
+deploy/mediamtx/mediamtx.yml
+mediamtx/
+# служебные
+*.log
+.DS_Store
+Thumbs.db
+/docs/*.docx~
+
+# служебные файлы обработки
+*.part
