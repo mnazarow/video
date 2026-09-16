@@ -20,6 +20,8 @@ const isWatch = computed(() => route.name === 'watch' || route.name === 'live-wa
 
 onMounted(() => {
   ui.setTheme(ui.theme);
+  // Повышенная контрастность: личный выбор или значение по умолчанию из настроек портала
+  ui.setHighContrast(ui.highContrast || (localStorage.getItem('cv:a11y:contrast') === null && auth.config?.highContrastDefault === true));
   ws.connect();
   ws.on('notification', (m) => { auth.unread = m.unread ?? auth.unread + 1; ui.toast(m.notification?.title || 'Новое уведомление', { type: 'info', action: m.notification?.link ? { label: 'Открыть', to: m.notification.link } : null }); });
   ws.on('settings.changed', () => auth.refreshConfig());

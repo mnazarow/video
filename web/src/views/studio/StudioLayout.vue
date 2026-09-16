@@ -9,6 +9,7 @@ const NAV = [
   { to: '/studio/record', label: 'Записать экран', icon: 'screenShare', upload: true },
   { to: '/studio/live', label: 'Трансляции', icon: 'broadcast', live: true },
   { to: '/studio/assignments', label: 'Обязательные просмотры', icon: 'clipboardList', assign: true },
+  { to: '/studio/courses', label: 'Курсы', icon: 'school', assign: true },
   { to: '/studio/playlists', label: 'Плейлисты', icon: 'playlist' },
   { to: '/studio/comments', label: 'Комментарии', icon: 'comment' },
   { to: '/studio/analytics', label: 'Аналитика', icon: 'analytics' },

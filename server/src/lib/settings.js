@@ -33,7 +33,15 @@ export const DEFAULTS = {
   'security.lockout_minutes': 15,
   'security.allow_totp': true,
   'security.require_totp_admins': false,   // администраторы обязаны включить двухфакторную защиту
-
+  // 1.4 — вовлечение и доступность
+  'engage.reactions': true,             // реакции по таймкоду
+  'engage.heatmap': true,               // тепловая карта «часто пересматривают»
+  'engage.heatmap_min_views': 20,       // с какого числа просмотров показывать кривую зрителям
+  'courses.enabled': true,              // учебные программы
+  'courses.self_enroll': true,          // запись на курс по своей инициативе
+  'player.logo': false,                 // логотип портала поверх видео
+  'player.skip_intro': true,            // кнопка «Пропустить вступление»
+  'a11y.high_contrast_default': false,  // режим повышенной контрастности по умолчанию
   // Загрузка и обработка
   'upload.max_size_mb': 8192,
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
@@ -332,6 +340,14 @@ export async function publicSettings() {
     feedsEnabled: s['feeds.enabled'],
     requireTotpAdmins: s['security.require_totp_admins'],
     xapiEnabled: s['xapi.enabled'] && !!s['xapi.endpoint'],
+    // 1.4
+    coursesEnabled: s['courses.enabled'],
+    coursesSelfEnroll: s['courses.self_enroll'],
+    reactionsEnabled: s['engage.reactions'],
+    heatmapEnabled: s['engage.heatmap'],
+    playerLogo: s['player.logo'],
+    skipIntro: s['player.skip_intro'],
+    highContrastDefault: s['a11y.high_contrast_default'],
   };
 }
 

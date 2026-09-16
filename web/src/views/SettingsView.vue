@@ -162,6 +162,10 @@ async function copy(t) { await copyWithToast(ui, t); }
             <label class="switch"><input type="checkbox" :checked="ui.autoplay" @change="ui.setAutoplay($event.target.checked)" /><span class="track"></span><span>Автовоспроизведение следующего видео</span></label>
             <label class="switch"><input type="checkbox" :checked="ui.theater" @change="ui.setTheater($event.target.checked)" /><span class="track"></span><span>Широкий режим плеера по умолчанию</span></label>
             <label class="switch"><input type="checkbox" :checked="!!auth.user.prefs?.pauseHistory" @change="patch('/api/me', { prefs: { pauseHistory: $event.target.checked } }).then((r) => auth.setUser(r.user))" /><span class="track"></span><span>Не сохранять историю просмотров</span></label>
+            <div class="divider"></div>
+            <h4 class="mb-8">Доступность</h4>
+            <label class="switch"><input type="checkbox" :checked="ui.highContrast" @change="ui.setHighContrast($event.target.checked)" /><span class="track"></span><span>Повышенная контрастность интерфейса</span></label>
+            <p class="small muted" style="margin:0">Размер субтитров и плотность подложки настраиваются в самом плеере: «Настройки → Вид субтитров». Плеер управляется с клавиатуры, порядок обхода элементов соответствует их расположению.</p>
           </div>
           <div class="divider"></div>
           <h4 class="mb-8">Горячие клавиши плеера</h4>

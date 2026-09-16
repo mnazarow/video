@@ -40,8 +40,14 @@ export async function hasPrivateAccess(videoId, userId) {
         OR EXISTS (SELECT 1 FROM video_group_access ga JOIN group_members gm ON gm.group_id = ga.group_id WHERE ga.video_id = $1 AND gm.user_id = $2)
         OR EXISTS (
           SELECT 1 FROM assignments a JOIN assignment_targets t ON t.assignment_id = a.id
-          WHERE a.status = 'active' AND (a.video_id = $1 OR a.playlist_id IN (SELECT playlist_id FROM playlist_items WHERE video_id = $1))
-            AND (t.target_type = 'all' OR t.user_id = $2 OR (t.target_type = 'group' AND t.group_id IN (SELECT group_id FROM group_members WHERE user_id = $2))))`,
+          WHERE a.status = 'active' AND (a.video_id = $1 OR a.playlist_id IN (SELECT playlist_id FROM playlist_items WHERE video_id = $1)
+                 OR a.course_id IN (SELECT course_id FROM course_items WHERE video_id = $1 AND kind = 'video'))
+            AND (t.target_type = 'all' OR t.user_id = $2 OR (t.target_type = 'group' AND t.group_id IN (SELECT group_id FROM group_members WHERE user_id = $2))))
+        OR EXISTS (
+          -- запись на опубликованный курс, в состав которого входит это видео
+          SELECT 1 FROM course_enrollments e JOIN course_items ci ON ci.course_id = e.course_id
+          JOIN courses c ON c.id = e.course_id
+          WHERE e.user_id = $2 AND ci.video_id = $1 AND ci.kind = 'video' AND c.status = 'published')`,
     [videoId, userId],
   );
   return !!row;

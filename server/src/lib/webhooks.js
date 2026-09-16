@@ -19,6 +19,7 @@ export const WEBHOOK_EVENTS = [
   ['assignment.completed', 'Сотрудник выполнил назначение'],
   ['quiz.passed', 'Тест сдан'],
   ['certificate.issued', 'Выдан сертификат'],
+  ['course.completed', 'Курс пройден'],
   ['user.registered', 'Новая регистрация'],
   ['user.approved', 'Учётная запись одобрена'],
   ['webhook.test', 'Проверочное событие'],

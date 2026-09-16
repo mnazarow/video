@@ -315,3 +315,18 @@ pre.code { background: var(--bg-2); border-radius: var(--radius-sm); padding: 12
 .up-bar i { display: block; height: 100%; background: var(--brand-400); transition: width 300ms linear; }
 .up-bar i.done { background: var(--success); }
 .up-bar i.err { background: var(--danger); }
+
+
+/* 1.4: режим повышенной контрастности (WCAG 2.2: контраст текста и границ элементов) */
+.high-contrast {
+  --muted: #3a3a3a;
+  --border: #6b6b6b;
+}
+.high-contrast[data-theme='dark'] { --muted: #dcdcdc; --border: #9a9a9a; }
+.high-contrast body { background: #fff; }
+.high-contrast[data-theme='dark'] body { background: #000; }
+.high-contrast .btn, .high-contrast .input, .high-contrast .select, .high-contrast .panel, .high-contrast .chip { border-width: 2px; }
+.high-contrast a, .high-contrast .vc-title { text-decoration: underline; }
+.high-contrast .tiny, .high-contrast .small { font-size: 14px; }
+.high-contrast :focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+.high-contrast .player-video::cue { background: #000; color: #fff; }

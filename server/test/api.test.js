@@ -1216,6 +1216,124 @@ test('папка автоимпорта и пробный дайджест', asy
   await user.del(`/api/videos/${editVideoId}`);
 });
 
+test('курсы: создание, шаги, публикация, прохождение, сертификат, отчёт и назначение', async () => {
+  const stampC = Date.now().toString(36);
+  const cr = await admin.post('/api/courses', { title: `Курс ${stampC}`, description: 'Проверочный курс', requiredPercent: 20 });
+  assert.equal(cr.status, 200, cr.text);
+  const cid = cr.json.course.id;
+  assert.ok(cr.json.course.slug, 'у курса есть адрес');
+
+  // Шаги: видео, текст, материал
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) > 3);
+  assert.ok(v, 'нужно готовое видео');
+  const i1 = await admin.post(`/api/courses/${cid}/items`, { kind: 'video', videoId: v.id, section: 'Раздел 1' });
+  const i2 = await admin.post(`/api/courses/${cid}/items`, { kind: 'text', title: 'Пояснение', body: 'Текст шага', section: 'Раздел 1' });
+  const i3 = await admin.post(`/api/courses/${cid}/items`, { kind: 'material', title: 'Регламент', url: 'https://example.com/doc.pdf', section: 'Раздел 2' });
+  assert.equal(i1.status, 200, i1.text);
+  assert.equal(i3.status, 200, i3.text);
+
+  // Черновик нельзя назначить
+  const early = await admin.post('/api/assignments', { courseId: cid, targets: [{ type: 'user', id: 'user@vodokomfort.ru' }] });
+  assert.equal(early.status, 400, 'черновик курса не назначается');
+
+  const pub = await admin.patch(`/api/courses/${cid}`, { status: 'published' });
+  assert.equal(pub.json.course.status, 'published', pub.text);
+
+  // Сотрудник записывается сам и проходит шаги
+  await user.post(`/api/courses/${cid}/enroll`, {});
+  const page = await user.get(`/api/courses/${cid}`);
+  assert.equal(page.status, 200, page.text);
+  assert.equal(page.json.items.length, 3);
+  assert.equal(page.json.items[0].locked, false, 'первый шаг открыт');
+  assert.equal(page.json.items[1].locked, true, 'последовательный курс: следующий шаг закрыт');
+  const blocked = await user.post(`/api/courses/${cid}/items/${i2.json.item.id}/complete`, {});
+  assert.equal(blocked.status, 400, 'закрытый шаг нельзя отметить');
+
+  // Просмотр видео засчитывает первый шаг
+  await user.post(`/api/videos/${v.shortId}/progress`, { position: Number(v.duration) * 0.95, watchedDelta: 6, source: 'watch' });
+  const afterWatch = await user.get(`/api/courses/${cid}`);
+  assert.equal(afterWatch.json.items[0].completed, true, 'видео-шаг засчитан');
+  assert.equal(afterWatch.json.items[1].locked, false, 'следующий шаг открылся');
+
+  await user.post(`/api/courses/${cid}/items/${i2.json.item.id}/complete`, {});
+  await user.post(`/api/courses/${cid}/items/${i3.json.item.id}/complete`, {});
+  const done = await user.get(`/api/courses/${cid}`);
+  assert.equal(done.json.course.completed, true, 'курс пройден');
+  assert.equal(done.json.course.percent, 100);
+
+  // Сертификат за курс
+  const certs = await user.get('/api/me/certificates');
+  assert.ok((certs.json.certificates || []).some((c) => c.title === `Курс ${stampC}`), 'выдан сертификат за курс');
+
+  // Отчёт автору и CSV
+  const rep = await admin.get(`/api/courses/${cid}/report`);
+  assert.ok(rep.json.report.people.some((p) => p.completed), 'в отчёте есть прошедший');
+  const csv = await admin.get(`/api/courses/${cid}/report?format=csv`);
+  assert.match(csv.text, /Сотрудник;/);
+
+  // Назначение курса и раздел «Назначено вам»
+  const asg = await admin.post('/api/assignments', { courseId: cid, targets: [{ type: 'all' }], note: 'Пройти курс' });
+  assert.equal(asg.json.assignment.kind, 'course', asg.text);
+  const mine = await user.get('/api/assignments/mine');
+  assert.ok((mine.json.assignments || []).some((a) => a.kind === 'course'), 'курс виден в «Назначено вам»');
+
+  // Сводка по обучению
+  const ov = await admin.get('/api/learning/overview');
+  assert.ok(ov.json.courses.some((c) => c.id === cid), 'курс в сводке по обучению');
+  assert.ok(ov.json.people.length >= 1, 'в сводке есть сотрудники');
+});
+
+test('реакции по таймкоду, тепловая карта, звуковые дорожки и переход к моменту', async () => {
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) > 3);
+
+  // Реакции: постановка, повтор снимает, сводка автору
+  const r1 = await user.post(`/api/videos/${v.shortId}/reactions`, { kind: 'question', t: 4 });
+  assert.equal(r1.status, 200, r1.text);
+  const list = await user.get(`/api/videos/${v.shortId}/reactions`);
+  assert.ok(list.json.totals.question >= 1, 'реакция учтена');
+  assert.ok(list.json.marks.length >= 1, 'есть метки для полосы перемотки');
+  const again = await user.post(`/api/videos/${v.shortId}/reactions`, { kind: 'question', t: 4.5 });
+  assert.equal(again.json.removed, true, 'повторная реакция рядом снимает отметку');
+  const bad = await user.post(`/api/videos/${v.shortId}/reactions`, { kind: 'nope', t: 1 });
+  assert.equal(bad.status, 400, 'неизвестная реакция отклонена');
+  const rep = await admin.get(`/api/videos/${v.shortId}/reactions/report`);
+  assert.equal(rep.status, 200, rep.text);
+
+  // Тепловая карта: автору видна всегда, зрителю — только при достаточном числе просмотров
+  const hmOwner = await admin.get(`/api/videos/${v.shortId}/heatmap`);
+  assert.equal(hmOwner.json.available, true, 'автор видит кривую');
+  assert.equal(hmOwner.json.points.length, 100);
+  const hmUser = await user.get(`/api/videos/${v.shortId}/heatmap`);
+  assert.equal(typeof hmUser.json.available, 'boolean');
+
+  // Границы вступления
+  const pv = await admin.patch(`/api/videos/${v.id}`, { introEnd: 2.5, outroStart: Math.max(3, Number(v.duration) - 1) });
+  assert.equal(pv.status, 200, pv.text);
+  assert.equal((await admin.get(`/api/videos/${v.shortId}`)).json.video.introEnd, 2.5);
+
+  // Звуковая дорожка (дубляж)
+  const wav = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVEfmt ')], 64);
+  const fd = new FormData();
+  fd.append('kind', 'description');
+  fd.append('language', 'ru');
+  fd.append('label', 'Тифлокомментарий');
+  fd.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
+  const up = await admin.req('POST', `/api/videos/${v.id}/audio-tracks`, fd);
+  assert.equal(up.status, 200, up.text);
+  const tracks = await user.get(`/api/videos/${v.shortId}/audio-tracks`);
+  assert.ok(tracks.json.tracks.some((t) => t.kind === 'description'), 'дорожка видна зрителю');
+  await admin.del(`/api/videos/${v.id}/audio-tracks/${up.json.track.id}`);
+
+  // Переход к найденному моменту
+  const mom = await user.get(`/api/videos/${v.shortId}/moment?q=${encodeURIComponent('вода')}`);
+  assert.equal(mom.status, 200, mom.text);
+  assert.ok(Array.isArray(mom.json.hits));
+  const short = await user.get(`/api/videos/${v.shortId}/moment?q=a`);
+  assert.equal(short.status, 400, 'слишком короткий запрос отклонён');
+});
+
 test('границы доступа после аудита: токены, секреты вебхуков, гонки монтажа, валидность лент', async () => {
   // 1. API-токен не даёт доступа к администрированию, даже если владелец — администратор
   const t = await admin.post('/api/me/tokens', { name: 'audit' });

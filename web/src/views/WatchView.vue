@@ -158,6 +158,45 @@ const screenOpen = ref(false);
 const chatReplayOpen = ref(false);
 const clips = ref([]);
 const audioOnly = ref(false);
+// 1.4: тепловая карта «часто пересматривают», реакции по таймкоду, дополнительные звуковые дорожки
+const heatmap = ref([]);
+const reactions = ref({ marks: [], kinds: [], totals: {}, canReact: false });
+const audioTracks = ref([]);
+async function loadEngage(seq = loadSeq) {
+  const id = video.value?.shortId;
+  if (!id) return;
+  const [hm, rc, tr] = await Promise.all([
+    auth.config?.heatmapEnabled === false ? Promise.resolve(null) : get(`/api/videos/${id}/heatmap`).catch(() => null),
+    auth.config?.reactionsEnabled === false ? Promise.resolve(null) : get(`/api/videos/${id}/reactions`).catch(() => null),
+    get(`/api/videos/${id}/audio-tracks`).catch(() => null),
+  ]);
+  if (!isCurrentLoad(seq)) return;
+  heatmap.value = hm?.available ? hm.points : [];
+  reactions.value = rc && !rc.disabled ? rc : { marks: [], kinds: [], totals: {}, canReact: false };
+  audioTracks.value = tr?.tracks || [];
+}
+// 1.4: просмотр в рамках курса — показываем ленту возврата и следующий шаг
+const courseCtx = ref(null);
+async function loadCourseCtx(seq = loadSeq) {
+  const id = route.query.course;
+  if (!id) { courseCtx.value = null; return; }
+  try {
+    const r = await get(`/api/courses/${encodeURIComponent(String(id))}`);
+    if (!isCurrentLoad(seq)) return;
+    const idx = r.items.findIndex((it) => it.video?.id === video.value?.id);
+    const next = r.items.slice(idx + 1).find((it) => it.kind === 'video' && it.video && !it.locked);
+    courseCtx.value = { course: r.course, step: idx >= 0 ? idx + 1 : null, total: r.items.length, next };
+  } catch { courseCtx.value = null; }
+}
+
+async function onReact(e) {
+  try {
+    await post(`/api/videos/${video.value.shortId}/reactions`, e);
+    const rc = await get(`/api/videos/${video.value.shortId}/reactions`);
+    reactions.value = rc;
+    ui.toast(rc.mine?.length ? 'Момент отмечен' : 'Отметка снята');
+  } catch (err) { ui.toast(err.message, { type: 'error' }); }
+}
 async function loadClips(seq = loadSeq) { try { const r = await get(`/api/videos/${video.value.shortId}/clips`); if (isCurrentLoad(seq)) clips.value = r.clips; } catch { if (isCurrentLoad(seq)) clips.value = []; } }
 function queueThis() { if (!video.value) return; if (ui.queueAdd(video.value)) ui.toast('Добавлено в очередь', { type: 'success' }); else ui.toast('Уже в очереди'); }
 function playQueued(q) { ui.queueRemove(q.id); router.push({ name: 'watch', params: { id: q.shortId } }); }
@@ -212,7 +251,7 @@ async function load() {
     else startAt.value = Number.isFinite(t) && t > 0 ? t : (r.video.viewer?.position && r.video.viewer.position > 5 ? r.video.viewer.position : 0);
     source.value = detectSource();
     get(`/api/videos/${r.video.shortId}/related?limit=20`).then((x) => { if (isCurrentLoad(seq)) related.value = x.videos; }).catch(() => {});
-    loadAttachments(seq); loadClips(seq);
+    loadAttachments(seq); loadClips(seq); loadEngage(seq); loadCourseCtx(seq);
     screenOpen.value = route.query.panel === 'screen' && !!r.video.hasScreenText;
     chatReplayOpen.value = route.query.panel === 'chat' && !!r.video.hasChatReplay;
     if (route.query.list) get(`/api/playlists/${route.query.list}?limit=200`).then((p) => { if (isCurrentLoad(seq)) playlist.value = p; }).catch(() => { if (isCurrentLoad(seq)) playlist.value = null; });
@@ -297,13 +336,23 @@ onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptT
     <template v-else-if="video">
       <div class="player-wrap" :class="{ theater }">
         <div class="player-inner">
+          <div v-if="courseCtx" class="panel course-bar mb-8">
+            <Icon name="school" :size="18" />
+            <router-link class="grow ellipsis" :to="`/course/${courseCtx.course.slug || courseCtx.course.id}`"><b>{{ courseCtx.course.title }}</b></router-link>
+            <span class="tiny muted nowrap" v-if="courseCtx.step">Шаг {{ courseCtx.step }} из {{ courseCtx.total }}</span>
+            <router-link v-if="courseCtx.next" class="btn sm" :to="`/watch/${courseCtx.next.video.shortId}?course=${courseCtx.course.slug || courseCtx.course.id}`">Следующий шаг <Icon name="next" :size="16" /></router-link>
+          </div>
           <div v-if="video.status !== 'ready'" class="player processing-card">
             <div class="col" style="align-items: center; text-align: center; padding: 24px">
               <div v-if="video.status === 'failed'" class="col" style="align-items:center"><Icon name="alertCircle" :size="40" /><h3 style="color:#fff">Не удалось обработать видео</h3><p class="small" style="opacity:.8">{{ video.processingError }}</p></div>
               <template v-else><div class="spin big"></div><h3 style="color:#fff; margin-top: 12px">Видео обрабатывается</h3><p class="small" style="opacity:.8">{{ video.processingProgress || 0 }}% — {{ ({ probe: 'анализ', hls: 'кодирование', thumbnails: 'миниатюры', storyboard: 'раскадровка', mp4: 'подготовка mp4' })[video.processingStage] || 'в очереди' }}</p></template>
             </div>
           </div>
-          <VideoPlayer v-else ref="player" :key="video.id" :src="video.hlsUrl" :mp4="video.mp4Url" :audio="video.audioUrl" :audio-only="audioOnly" :poster="video.thumbnailUrl" :subtitles="video.subtitles" :chapters="video.chapters" :storyboard="video.storyboardUrl" :duration="video.duration" :start-at="startAt" :autoplay="true" :title="video.title" :has-next="!!nextVideo" :theater="theater" @progress="onProgress" @ended="onEnded" @play="ended = false" @next="goNext" @theater="toggleTheater" @mini="openMini" @help="helpOpen = true">
+          <VideoPlayer v-else ref="player" :key="video.id" :src="video.hlsUrl" :mp4="video.mp4Url" :audio="video.audioUrl" :audio-only="audioOnly" :poster="video.thumbnailUrl" :subtitles="video.subtitles" :chapters="video.chapters" :storyboard="video.storyboardUrl" :duration="video.duration" :start-at="startAt" :autoplay="true" :title="video.title" :has-next="!!nextVideo" :theater="theater"
+            :heatmap="heatmap" :reaction-marks="reactions.marks" :reaction-kinds="reactions.canReact ? reactions.kinds : []" :audio-tracks="audioTracks"
+            :intro-end="auth.config?.skipIntro === false ? 0 : (video.introEnd || 0)" :outro-start="auth.config?.skipIntro === false ? 0 : (video.outroStart || 0)"
+            :logo="auth.config?.playerLogo ? (auth.config?.logoUrl || '/icons/icon-192.png') : ''"
+            @progress="onProgress" @ended="onEnded" @play="ended = false" @next="goNext" @theater="toggleTheater" @mini="openMini" @help="helpOpen = true" @react="onReact">
             <template #overlay>
               <ViewerWatermark v-if="watermarkText" :text="watermarkText" />
               <CardsOverlay v-if="(video.cards?.length || video.endScreen) && !endScreen && !attention.visible && !clipDone" :video="video" :player="player" :ended="ended" />
@@ -502,6 +551,9 @@ onBeforeUnmount(() => { clearInterval(countdownTimer); clearInterval(transcriptT
 </template>
 
 <style>
+.course-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.course-bar a { color: inherit; text-decoration: none; }
+.course-bar a:hover b { text-decoration: underline; }
 .transcript { margin-bottom: 16px; }
 .clips-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .queue-item { padding: 4px; border-radius: 8px; } .queue-item:hover { background: var(--surface-2); }

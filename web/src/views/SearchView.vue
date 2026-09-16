@@ -45,7 +45,7 @@ const TYPES = [['video', 'Видео'], ['channel', 'Каналы'], ['playlist'
 
     <div v-if="list.loading.value" class="loading-block"><div class="spin"></div></div>
     <template v-else-if="type === 'video'">
-      <VideoGrid :videos="list.items.value" layout="list" empty-icon="search" :empty-title="q ? 'Ничего не найдено' : 'Введите запрос'" :empty-text="q ? 'Попробуйте изменить запрос или снять фильтры. Поиск ведётся по названию, тегам, описанию и расшифровке речи.' : ''" />
+      <VideoGrid :videos="list.items.value" layout="list" :search-query="q" empty-icon="search" :empty-title="q ? 'Ничего не найдено' : 'Введите запрос'" :empty-text="q ? 'Попробуйте изменить запрос или снять фильтры. Поиск ведётся по названию, тегам, описанию и расшифровке речи.' : ''" />
       <Pagination :page="list.page.value" :total="list.total.value" :limit="20" @change="list.setPage" />
     </template>
     <template v-else-if="type === 'channel'">

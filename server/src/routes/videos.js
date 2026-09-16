@@ -16,6 +16,7 @@ import { notify, notifyAdmins, notifySubscribersNewVideo } from '../lib/notify.j
 import { randomToken, sign, unsign } from '../lib/crypto.js';
 import { config } from '../config.js';
 import { updateAssignmentProgress, assignmentsForUserVideo } from '../lib/assignments.js';
+import { updateCourseProgressForVideo } from '../lib/courses.js';
 import { toCsv, sendCsv } from '../lib/csv.js';
 import { emitEvent, eventVideo } from '../lib/events.js';
 
@@ -195,6 +196,7 @@ export default async function videoRoutes(app) {
     if (req.user && !pauseHistory) {
       const maxPos = await one('SELECT max(max_position) AS m FROM video_views WHERE video_id = $1 AND user_id = $2', [v.id, req.user.id]);
       await updateAssignmentProgress(req.user.id, v, Number(maxPos?.m || position)).catch((e) => req.log.warn({ err: e.message }, 'assignment progress'));
+      await updateCourseProgressForVideo(req.user.id, v, Number(maxPos?.m || position)).catch((e) => req.log.warn({ err: e.message }, 'course progress'));
     }
     return { ok: true, counted, position };
   });
@@ -237,6 +239,9 @@ export default async function videoRoutes(app) {
     }
     if (b.commentsMode !== undefined) { if (!['open', 'held', 'disabled'].includes(b.commentsMode)) throw badRequest(); add('comments_mode', b.commentsMode); }
     if (b.allowDownload !== undefined) add('allow_download', !!b.allowDownload);
+    // Границы вступления и финальной заставки — для кнопки «Пропустить» в плеере
+    if (b.introEnd !== undefined) add('intro_end', b.introEnd === null || b.introEnd === '' ? null : Math.max(0, Number(b.introEnd) || 0));
+    if (b.outroStart !== undefined) add('outro_start', b.outroStart === null || b.outroStart === '' ? null : Math.max(0, Number(b.outroStart) || 0));
     if (b.viewerWatermark !== undefined) add('viewer_watermark', !!b.viewerWatermark);
     if (b.allowEmbed !== undefined) add('allow_embed', !!b.allowEmbed);
     if (b.allowRatings !== undefined) add('allow_ratings', !!b.allowRatings);

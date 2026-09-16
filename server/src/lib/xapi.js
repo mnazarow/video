@@ -32,20 +32,24 @@ export function xapiObject(video) {
 }
 
 /** Записать выражение и поставить отправку в очередь. verb: completed | passed | failed | experienced | progressed */
-export async function xapiStatement(verb, { user, video, result = null, context = null }) {
+export async function xapiStatement(verb, { user, video, object = null, result = null, context = null }) {
   if (!getSettingSync('xapi.enabled') || !getSettingSync('xapi.endpoint')) return null;
-  if (!VERBS[verb] || !user || !video) return null;
+  if (!VERBS[verb] || !user || (!video && !object)) return null;
   const s = await loadSettings();
+  // object — произвольная активность (например курс); по умолчанию это видео
+  const activity = object
+    ? { objectType: 'Activity', id: object.id, definition: { name: { 'ru-RU': object.name }, type: object.type || 'http://adlnet.gov/expapi/activities/course' } }
+    : xapiObject(video);
   const statement = {
     id: crypto.randomUUID(),
     actor: xapiActor(user, s),
     verb: VERBS[verb],
-    object: xapiObject(video),
+    object: activity,
     timestamp: new Date().toISOString(),
     context: { platform: 'CorpVideo', language: 'ru-RU', ...(context || {}) },
   };
   if (result) statement.result = result;
-  const row = await one('INSERT INTO xapi_statements(user_id, video_id, verb, statement) VALUES ($1,$2,$3,$4::jsonb) RETURNING id', [user.id, video.id, verb, JSON.stringify(statement)]);
+  const row = await one('INSERT INTO xapi_statements(user_id, video_id, verb, statement) VALUES ($1,$2,$3,$4::jsonb) RETURNING id', [user.id, video?.id || null, verb, JSON.stringify(statement)]);
   await enqueue('xapi_send', { statementId: row.id }, { dedupe: false, maxAttempts: 5 });
   return row.id;
 }

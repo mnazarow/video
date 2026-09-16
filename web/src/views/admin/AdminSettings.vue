@@ -14,7 +14,7 @@ const saving = ref(false);
 const testing = ref('');
 const testResult = ref(null);
 const tab = computed(() => route.params.tab || 'general');
-const TABS = [['general', 'Общие', 'settings'], ['registration', 'Регистрация и безопасность', 'shield'], ['upload', 'Загрузка и обработка', 'upload'], ['comments', 'Комментарии', 'comment'], ['smtp', 'Почта (SMTP)', 'mail'], ['ldap', 'Active Directory / LDAP', 'lan'], ['sso', 'Вход через SSO (OIDC)', 'key'], ['asr', 'Автосубтитры (ASR)', 'robot'], ['ai', 'ИИ-помощник', 'sparkles'], ['learning', 'Обучение и аналитика', 'assignment'], ['integrations', 'Telegram и RAG', 'send'], ['webhooks', 'Вебхуки и xAPI', 'webhook'], ['tools', 'Редактор, OCR, ленты', 'scissors'], ['live', 'Трансляции', 'broadcast'], ['branding', 'Оформление', 'palette'], ['retention', 'Хранение данных', 'database']];
+const TABS = [['general', 'Общие', 'settings'], ['registration', 'Регистрация и безопасность', 'shield'], ['upload', 'Загрузка и обработка', 'upload'], ['comments', 'Комментарии', 'comment'], ['smtp', 'Почта (SMTP)', 'mail'], ['ldap', 'Active Directory / LDAP', 'lan'], ['sso', 'Вход через SSO (OIDC)', 'key'], ['asr', 'Автосубтитры (ASR)', 'robot'], ['ai', 'ИИ-помощник', 'sparkles'], ['learning', 'Обучение и аналитика', 'assignment'], ['engage', 'Курсы и вовлечение', 'school'], ['integrations', 'Telegram и RAG', 'send'], ['webhooks', 'Вебхуки и xAPI', 'webhook'], ['tools', 'Редактор, OCR, ленты', 'scissors'], ['live', 'Трансляции', 'broadcast'], ['branding', 'Оформление', 'palette'], ['retention', 'Хранение данных', 'database']];
 
 const loadError = ref('');
 async function load() {
@@ -401,6 +401,31 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
                 <tr v-if="!xapi.statements.length"><td colspan="6" class="muted">Выражений ещё не было</td></tr>
               </tbody></table></div>
             </div>
+          </div>
+        </div>
+
+        <div v-else-if="tab === 'engage'" class="col gap-24">
+          <div class="panel"><h3 class="mb-8"><Icon name="school" :size="20" style="vertical-align:-4px" /> Учебные программы (курсы)</h3>
+            <p class="small muted">Курс — это последовательность шагов: видео, материалы и пояснения. Прогресс считается по просмотру и тестам, по завершении выдаётся сертификат. Создаются в студии: «Студия → Курсы».</p>
+            <label class="switch"><input type="checkbox" v-model="s['courses.enabled']" /><span class="track"></span><span>Раздел «Курсы» включён</span></label>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['courses.self_enroll']" /><span class="track"></span><span>Сотрудники могут записываться на курсы сами</span></label>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('courses.'))">Сохранить</button></div>
+          </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="heartOutline" :size="20" style="vertical-align:-4px" /> Реакции и тепловая карта</h3>
+            <p class="small muted">Зрители отмечают моменты (полезно, нравится, впечатляет, непонятно) — отметки видны на полосе перемотки и в аналитике автора. Тепловая карта показывает, какие места пересматривают чаще; она обезличена и появляется только при достаточном числе просмотров.</p>
+            <label class="switch"><input type="checkbox" v-model="s['engage.reactions']" /><span class="track"></span><span>Реакции по таймкоду</span></label>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['engage.heatmap']" /><span class="track"></span><span>Тепловая карта «часто пересматривают»</span></label>
+            <div class="form-grid">
+              <div class="field"><label>Показывать кривую от, просмотров</label><input class="input" type="number" min="3" max="1000" v-model.number="s['engage.heatmap_min_views']" /><div class="hint">Автор видит кривую всегда</div></div>
+            </div>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('engage.'))">Сохранить</button></div>
+          </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="tune" :size="20" style="vertical-align:-4px" /> Плеер и доступность</h3>
+            <p class="small muted">Кнопка «Пропустить вступление» появляется, если у видео заданы границы заставки (студия → «Сведения»). Размер субтитров и подложку зритель настраивает сам в меню плеера.</p>
+            <label class="switch"><input type="checkbox" v-model="s['player.skip_intro']" /><span class="track"></span><span>Кнопка «Пропустить вступление»</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['player.logo']" /><span class="track"></span><span>Логотип портала поверх видео</span></label>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['a11y.high_contrast_default']" /><span class="track"></span><span>Повышенная контрастность по умолчанию</span></label>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('player.'), ...prefix('a11y.')])">Сохранить</button></div>
           </div>
         </div>
 

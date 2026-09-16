@@ -12,6 +12,7 @@ defineProps({
   showStatus: { type: Boolean, default: false },
   skeletons: { type: Number, default: 8 },
   playlistId: { type: String, default: '' },
+  searchQuery: { type: String, default: '' },
 });
 </script>
 
@@ -24,7 +25,7 @@ defineProps({
   </div>
   <EmptyState v-else-if="!videos.length" :title="emptyTitle" :text="emptyText" :icon="emptyIcon"><slot name="empty" /></EmptyState>
   <div v-else class="video-grid" :class="{ shorts: layout === 'shorts', compact: layout === 'compact', 'list-layout': layout === 'list' }">
-    <VideoCard v-for="v in videos" :key="v.id" :video="v" :layout="layout" :show-channel="showChannel" :show-status="showStatus" :playlist-id="playlistId">
+    <VideoCard v-for="v in videos" :key="v.id" :video="v" :layout="layout" :show-channel="showChannel" :show-status="showStatus" :playlist-id="playlistId" :search-query="searchQuery">
       <template #menu><slot name="menu" :video="v" /></template>
     </VideoCard>
   </div>

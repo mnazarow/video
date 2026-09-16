@@ -46,7 +46,7 @@ async function load() {
     video.value = (await get(`/api/videos/${route.params.id}`)).video;
     formFilling = true;
     const v = video.value;
-    form.value = { title: v.title, description: v.description, categoryId: v.categoryId || '', tags: (v.tags || []).join(', '), visibility: v.visibility, commentsMode: v.commentsMode, allowDownload: v.allowDownload, allowEmbed: v.allowEmbed, allowRatings: v.allowRatings, scheduledAt: toLocalInput(v.scheduledAt), language: v.language || 'ru', viewerWatermark: !!v.viewerWatermark, expiresAt: toLocalInput(v.expiresAt) };
+    form.value = { title: v.title, description: v.description, categoryId: v.categoryId || '', tags: (v.tags || []).join(', '), visibility: v.visibility, commentsMode: v.commentsMode, allowDownload: v.allowDownload, allowEmbed: v.allowEmbed, allowRatings: v.allowRatings, scheduledAt: toLocalInput(v.scheduledAt), language: v.language || 'ru', viewerWatermark: !!v.viewerWatermark, expiresAt: toLocalInput(v.expiresAt), introEnd: v.introEnd ?? null, outroStart: v.outroStart ?? null };
     chapters.value = (v.chapters || []).map((c) => ({ ...c }));
     accessUsers.value = v.accessUsers || [];
     accessGroups.value = v.accessGroups || [];
@@ -67,6 +67,7 @@ onMounted(async () => {
 onBeforeUnmount(() => off.forEach((f) => f()));
 watch(() => route.params.id, load);
 watch(form, () => { if (!formFilling) dirty.value = true; }, { deep: true });
+watch(tab, (t) => { if (t === 'subtitles') loadTracks(); }, { immediate: true });
 
 // Не теряем несохранённые сведения при уходе со страницы (переключение вкладок того же видео — не уход)
 function warnUnsaved(e) { if (dirty.value) { e.preventDefault(); e.returnValue = ''; } }
@@ -175,6 +176,29 @@ async function loadAnalytics() { analytics.value = (await get(`/api/videos/${vid
 watch(range, loadAnalytics);
 const shareUrl = computed(() => `${window.location.origin}/watch/${video.value?.shortId}`);
 async function copy(t) { await copyWithToast(ui, t); }
+
+// 1.4: дополнительные звуковые дорожки (дубляж, тифлокомментарий)
+const audioTracks = ref([]);
+const trackForm = ref({ kind: 'dub', language: 'en', label: '' });
+async function loadTracks() {
+  try { audioTracks.value = (await get(`/api/videos/${route.params.id}/audio-tracks`)).tracks; } catch { audioTracks.value = []; }
+}
+async function uploadTrack(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    await uploadFile(`/api/videos/${route.params.id}/audio-tracks`, file, {
+      fields: { kind: trackForm.value.kind, language: trackForm.value.language || 'ru', ...(trackForm.value.label ? { label: trackForm.value.label } : {}) },
+    });
+    await loadTracks();
+    ui.toast('Дорожка загружена', { type: 'success' });
+  } catch (err) { ui.toast(err.message, { type: 'error' }); }
+}
+async function removeTrack(t) {
+  if (!(await ui.ask({ title: `Удалить дорожку «${t.label}»?`, okLabel: 'Удалить', danger: true }))) return;
+  try { await del(`/api/videos/${route.params.id}/audio-tracks/${t.id}`); await loadTracks(); } catch (err) { ui.toast(err.message, { type: 'error' }); }
+}
 </script>
 
 <template>
@@ -233,6 +257,8 @@ async function copy(t) { await copyWithToast(ui, t); }
         <div class="field"><label>Отложенная публикация</label><input class="input" type="datetime-local" v-model="form.scheduledAt" /><div class="hint">До указанного времени видео видно только вам</div></div>
         <div class="field"><label>Срок публикации</label><input class="input" type="datetime-local" v-model="form.expiresAt" /><div class="hint">После этой даты видео станет приватным (ссылка и статистика сохранятся)<span v-if="video.expiredAt"> · срок истёк {{ fmtDateTime(video.expiredAt) }}</span></div></div>
         <div class="field"><label>Комментарии</label><select class="select" v-model="form.commentsMode"><option value="open">Разрешены</option><option value="held">Публиковать после проверки</option><option value="disabled">Отключены</option></select></div>
+        <div class="field"><label>Конец вступления, с</label><input class="input" type="number" min="0" step="0.5" v-model.number="form.introEnd" placeholder="например 12" /></div>
+        <div class="field"><label>Начало финальной заставки, с</label><input class="input" type="number" min="0" step="0.5" v-model.number="form.outroStart" placeholder="например 540" /></div>
         <div class="field" style="justify-content: flex-end"><label class="switch"><input type="checkbox" v-model="form.allowDownload" /><span class="track"></span><span>Разрешить скачивание</span></label><label class="switch"><input type="checkbox" v-model="form.allowEmbed" /><span class="track"></span><span>Разрешить встраивание</span></label><label class="switch"><input type="checkbox" v-model="form.allowRatings" /><span class="track"></span><span>Показывать оценки</span></label></div>
       </div>
       <div class="form-actions"><button class="btn primary" :disabled="saving || !dirty" @click="save()">{{ saving ? 'Сохранение…' : 'Сохранить' }}</button><span v-if="dirty" class="small muted">Есть несохранённые изменения</span></div>
@@ -288,6 +314,25 @@ async function copy(t) { await copyWithToast(ui, t); }
       <div class="table-wrap"><table class="table"><thead><tr><th>Язык</th><th>Подпись</th><th>Тип</th><th>Статус</th><th></th></tr></thead><tbody>
         <tr v-for="s in subs" :key="s.id"><td>{{ s.language }}</td><td>{{ s.label }} <span v-if="s.isDefault" class="badge brand">по умолчанию</span></td><td>{{ s.translatedFrom ? 'Перевод (ИИ)' : s.kind === 'auto' ? 'Автоматические' : 'Загружены' }}</td><td><span class="badge" :class="s.status === 'ready' ? 'success' : s.status === 'failed' ? 'danger' : 'warning'">{{ { ready: 'Готово', processing: 'Распознавание…', failed: 'Ошибка' }[s.status] }}</span><div v-if="s.error" class="tiny danger" style="color:var(--danger)">{{ s.error }}</div></td><td class="actions"><button v-if="!s.isDefault && s.status === 'ready'" class="btn ghost sm" @click="defaultSub(s)">По умолчанию</button><button v-if="auth.config?.translateEnabled && s.status === 'ready' && s.language !== translateLang" class="btn ghost sm" :title="`Перевести на ${LANG_NAMES[translateLang] || translateLang} через ИИ`" @click="translateSub(s)"><Icon name="translate" :size="14" /> Перевести</button><a v-if="s.url" :href="s.url" class="btn ghost sm" download>VTT</a><button class="btn ghost sm danger" @click="removeSub(s)">Удалить</button></td></tr>
         <tr v-if="!subs.length"><td colspan="5" class="muted">Субтитров нет</td></tr>
+      </tbody></table></div>
+
+      <h3 class="mt-16 mb-8">Звуковые дорожки</h3>
+      <p class="muted small">Дубляж на другой язык или тифлокомментарий (аудиоописание происходящего для незрячих). Зритель выбирает дорожку в меню плеера: «Настройки → Звук».</p>
+      <div class="row wrap gap-8 mb-16">
+        <select class="select sm" v-model="trackForm.kind" style="width:190px"><option value="dub">Дубляж</option><option value="description">Тифлокомментарий</option></select>
+        <input class="input sm" v-model="trackForm.language" style="width:90px" placeholder="язык" />
+        <input class="input sm" v-model="trackForm.label" style="width:220px" placeholder="Подпись (например: Английский)" />
+        <label class="btn sm"><Icon name="upload" :size="16" /> Загрузить .m4a/.mp3<input type="file" accept=".m4a,.mp3,.aac,.ogg,.opus,.wav" class="hidden" @change="uploadTrack" /></label>
+      </div>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Подпись</th><th>Тип</th><th>Язык</th><th>Размер</th><th></th></tr></thead><tbody>
+        <tr v-for="t in audioTracks" :key="t.id">
+          <td>{{ t.label }}</td>
+          <td class="small muted">{{ t.kind === 'description' ? 'Тифлокомментарий' : 'Дубляж' }}</td>
+          <td class="small">{{ t.language }}</td>
+          <td class="small muted">{{ fmtBytes(t.size) }}</td>
+          <td class="actions"><a v-if="t.url" class="btn ghost sm" :href="t.url" download>Скачать</a><button class="btn ghost sm danger" @click="removeTrack(t)">Удалить</button></td>
+        </tr>
+        <tr v-if="!audioTracks.length"><td colspan="5" class="muted">Дополнительных дорожек нет</td></tr>
       </tbody></table></div>
     </div>
 

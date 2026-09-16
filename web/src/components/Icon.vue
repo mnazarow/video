@@ -23,7 +23,7 @@ export const ICONS = {
   pin: mdi.mdiPin, heart: mdi.mdiHeart, heartOutline: mdi.mdiHeartOutline, cancel: mdi.mdiCancel, verified: mdi.mdiCheckDecagram, personAdd: mdi.mdiAccountPlus,
   person: mdi.mdiAccount, database: mdi.mdiDatabase, memory: mdi.mdiMemory, refresh: mdi.mdiRefresh, openNew: mdi.mdiOpenInNew, drag: mdi.mdiDragVertical,
   image: mdi.mdiImage, subtitles: mdi.mdiSubtitles, mic: mdi.mdiMicrophone, camera: mdi.mdiCamera, stop: mdi.mdiStop, send: mdi.mdiSend, timer: mdi.mdiTimerOutline,
-  help: mdi.mdiHelpCircle, keyboard: mdi.mdiKeyboardOutline, transcript: mdi.mdiTextBoxOutline, desktop: mdi.mdiMonitor, mobile: mdi.mdiCellphone, tablet: mdi.mdiTablet, tv: mdi.mdiTelevision, list: mdi.mdiFormatListBulleted,
+  help: mdi.mdiHelpCircle, keyboard: mdi.mdiKeyboardOutline, transcript: mdi.mdiTextBoxOutline, desktop: mdi.mdiMonitor, mobile: mdi.mdiCellphone, tablet: mdi.mdiTablet, tv: mdi.mdiTelevision, castTv: mdi.mdiCastVariant, list: mdi.mdiFormatListBulleted,
   grid: mdi.mdiViewGrid, videoPlus: mdi.mdiVideoPlus, movie: mdi.mdiMovieOpen, server: mdi.mdiServer, clipboard: mdi.mdiClipboardText, textSearch: mdi.mdiTextBoxSearch,
   translate: mdi.mdiTranslate, robot: mdi.mdiRobot, lan: mdi.mdiLan, emailFast: mdi.mdiEmailFast, palette: mdi.mdiPalette, broadcast: mdi.mdiBroadcast, domain: mdi.mdiDomain,
   tag: mdi.mdiTag, bookmark: mdi.mdiBookmarkOutline, bookmarkFill: mdi.mdiBookmark, timeline: mdi.mdiChartTimelineVariant, harddisk: mdi.mdiHarddisk, cpu: mdi.mdiCpu64Bit,

@@ -20,6 +20,7 @@ const NAV = [
   { to: '/admin/comments', label: 'Комментарии', icon: 'comment', badge: 'comments' },
   { to: '/admin/reports', label: 'Жалобы', icon: 'flag', badge: 'reports' },
   { to: '/admin/live', label: 'Трансляции', icon: 'broadcast', badge: 'live' },
+  { to: '/admin/learning', label: 'Обучение', icon: 'school' },
   { to: '/admin/categories', label: 'Категории', icon: 'folder' },
   { to: '/admin/jobs', label: 'Очередь заданий', icon: 'listStatus', badge: 'jobs' },
   { to: '/admin/settings', label: 'Настройки', icon: 'settings', admin: true },

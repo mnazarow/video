@@ -26,8 +26,16 @@ const props = defineProps({
   muted: { type: Boolean, default: false },
   audio: { type: String, default: '' },          // аудиодорожка (m4a) для режима «только звук» (1.3)
   audioOnly: { type: Boolean, default: false },
+  // 1.4
+  heatmap: { type: Array, default: () => [] },       // 100 точек 0…1 — «часто пересматривают»
+  reactionMarks: { type: Array, default: () => [] }, // [{t,total,kinds}] — реакции по таймкоду
+  reactionKinds: { type: Array, default: () => [] }, // [{id,label}]
+  audioTracks: { type: Array, default: () => [] },   // [{id,label,kind,url}] — дубляж и тифлокомментарий
+  introEnd: { type: Number, default: 0 },
+  outroStart: { type: Number, default: 0 },
+  logo: { type: String, default: '' },
 });
-const emit = defineEmits(['progress', 'ended', 'play', 'pause', 'next', 'theater', 'mini', 'error', 'ready', 'timeupdate', 'help']);
+const emit = defineEmits(['progress', 'ended', 'play', 'pause', 'next', 'theater', 'mini', 'error', 'ready', 'timeupdate', 'help', 'react']);
 
 const root = ref(null);
 const video = ref(null);
@@ -37,7 +45,10 @@ const state = ref({
   volume: 1, mutedState: props.muted, speed: 1, fullscreen: false, pip: false, controlsVisible: true, seeking: false,
   captions: null, quality: -1, autoLevel: null, loop: props.loopDefault, settingsOpen: '', hoverTime: -1, hoverX: 0,
   bigIcon: '', touchLeft: 0, touchRight: 0,
+  // 1.4
+  audioTrack: '', remote: 'unavailable', capSize: 100, capBg: 75, reactOpen: false, skipHidden: false,
 });
+const REACTION_ICON = { like: 'thumbUp', love: 'heart', wow: 'sparkles', question: 'help' };
 let hls = null;
 let hideTimer = null;
 let progressTimer = null;
@@ -52,6 +63,24 @@ const sbBase = ref('');
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
 const isLive = computed(() => props.live);
+const heatPath = computed(() => {
+  const pts = props.heatmap || [];
+  if (pts.length < 4) return '';
+  const w = 100, h = 22;
+  const step = w / (pts.length - 1);
+  // Сглаженная кривая по точкам удержания
+  let d = `M 0 ${h}`;
+  pts.forEach((v, i) => { d += ` L ${(i * step).toFixed(2)} ${(h - Math.max(0.03, v) * h).toFixed(2)}`; });
+  return `${d} L ${w} ${h} Z`;
+});
+const showSkipIntro = computed(() => !isLive.value && props.introEnd > 1 && state.value.time < props.introEnd - 0.4 && state.value.time > 0.3 && !state.value.skipHidden);
+const showSkipOutro = computed(() => !isLive.value && props.outroStart > 1 && dur.value && state.value.time >= props.outroStart && state.value.time < dur.value - 0.6 && !state.value.skipHidden);
+const reactionDots = computed(() => {
+  const d = dur.value;
+  if (!d) return [];
+  const max = (props.reactionMarks || []).reduce((m, x) => Math.max(m, x.total), 0) || 1;
+  return (props.reactionMarks || []).map((m) => ({ ...m, left: Math.min(100, (m.t / d) * 100), weight: Math.max(0.35, m.total / max) }));
+});
 const dur = computed(() => state.value.duration || props.duration || 0);
 const pct = computed(() => (dur.value ? Math.min(100, (state.value.time / dur.value) * 100) : 0));
 const bufPct = computed(() => (dur.value ? Math.min(100, (state.value.buffered / dur.value) * 100) : 0));
@@ -82,6 +111,75 @@ const qualityLabel = computed(() => {
   if (state.value.quality === -1) { const l = levels.value[state.value.autoLevel]; return `Авто${l ? ' (' + l.label + ')' : ''}`; }
   return levels.value[state.value.quality]?.label || '';
 });
+
+// --- 1.4: дополнительная звуковая дорожка (дубляж, тифлокомментарий) ---
+let altAudio = null;
+function applyAudioTrack(id) {
+  const el = video.value;
+  state.value.audioTrack = id || '';
+  if (altAudio) { altAudio.pause(); altAudio.remove(); altAudio = null; }
+  if (!el) return;
+  if (!id) { el.muted = state.value.mutedState; return; }
+  const t = (props.audioTracks || []).find((x) => x.id === id);
+  if (!t?.url) { state.value.audioTrack = ''; return; }
+  altAudio = document.createElement('audio');
+  altAudio.src = t.url;
+  altAudio.preload = 'auto';
+  altAudio.crossOrigin = 'use-credentials';
+  altAudio.volume = state.value.volume;
+  altAudio.playbackRate = state.value.speed;
+  altAudio.currentTime = el.currentTime || 0;
+  el.muted = true;                       // звук идёт с выбранной дорожки
+  if (!el.paused) altAudio.play().catch(() => {});
+  syncAlt();
+}
+function syncAlt() {
+  const el = video.value;
+  if (!altAudio || !el) return;
+  // Расхождение больше 0,3 с слышно — подтягиваем дорожку к видео
+  if (Math.abs(altAudio.currentTime - el.currentTime) > 0.3) altAudio.currentTime = el.currentTime;
+  if (altAudio.playbackRate !== el.playbackRate) altAudio.playbackRate = el.playbackRate;
+  if (el.paused && !altAudio.paused) altAudio.pause();
+  if (!el.paused && altAudio.paused) altAudio.play().catch(() => {});
+}
+
+// --- 1.4: вид субтитров (размер и подложка) ---
+function applyCaptionStyle() {
+  const el = root.value;
+  if (!el) return;
+  el.style.setProperty('--cue-size', `${state.value.capSize / 100}em`);
+  el.style.setProperty('--cue-bg', `rgba(0,0,0,${state.value.capBg / 100})`);
+}
+function setCapSize(v) { state.value.capSize = v; lsSet('capSize', v); applyCaptionStyle(); }
+function setCapBg(v) { state.value.capBg = v; lsSet('capBg', v); applyCaptionStyle(); }
+
+// --- 1.4: трансляция на ТВ (Remote Playback API / AirPlay) ---
+function setupRemote() {
+  const el = video.value;
+  if (!el) return;
+  if (window.WebKitPlaybackTargetAvailabilityEvent) {
+    el.addEventListener('webkitplaybacktargetavailabilitychanged', (e) => { state.value.remote = e.availability === 'available' ? 'available' : 'unavailable'; });
+  }
+  if (el.remote?.watchAvailability) {
+    el.remote.watchAvailability((available) => { state.value.remote = available ? 'available' : 'unavailable'; }).catch(() => { state.value.remote = 'maybe'; });
+    el.remote.addEventListener?.('connect', () => { state.value.remote = 'connected'; });
+    el.remote.addEventListener?.('disconnect', () => { state.value.remote = 'available'; });
+  }
+}
+function castToTv() {
+  const el = video.value;
+  if (!el) return;
+  if (el.webkitShowPlaybackTargetPicker) { el.webkitShowPlaybackTargetPicker(); return; }
+  el.remote?.prompt?.().catch(() => {});
+}
+
+// --- 1.4: реакции по таймкоду и пропуск вступления ---
+function react(kind) {
+  emit('react', { kind, t: Math.round((video.value?.currentTime || 0) * 10) / 10 });
+  state.value.reactOpen = false;
+}
+function skipIntro() { seekTo(props.introEnd + 0.1); state.value.skipHidden = false; }
+function skipOutro() { if (props.hasNext) emit('next'); else seekTo(dur.value); }
 
 function ls(key, def) { try { const v = localStorage.getItem('cv:player:' + key); return v === null ? def : JSON.parse(v); } catch { return def; } }
 function lsSet(key, v) { try { localStorage.setItem('cv:player:' + key, JSON.stringify(v)); } catch { /* ignore */ } }
@@ -200,8 +298,8 @@ function flushProgress(force = false) {
   emit('progress', { position: el ? el.currentTime : state.value.time, delta: Math.round(watchedDelta * 10) / 10, buckets: [...bucketsPending] });
   watchedDelta = 0; bucketsPending = new Set();
 }
-function onPlay() { state.value.playing = true; state.value.ended = false; lastTick = Date.now(); emit('play'); scheduleHide(); showBig('play'); }
-function onPause() { state.value.playing = false; lastTick = 0; emit('pause'); state.value.controlsVisible = true; flushProgress(true); showBig('pause'); }
+function onPlay() { state.value.playing = true; state.value.ended = false; lastTick = Date.now(); emit('play'); scheduleHide(); showBig('play'); syncAlt(); }
+function onPause() { state.value.playing = false; lastTick = 0; emit('pause'); state.value.controlsVisible = true; flushProgress(true); showBig('pause'); altAudio?.pause(); }
 function onEnded() { state.value.playing = false; state.value.ended = true; flushProgress(true); emit('ended'); state.value.controlsVisible = true; }
 function onWaiting() { state.value.waiting = true; }
 function onPlaying() { state.value.waiting = false; }
@@ -211,11 +309,11 @@ function onError() { if (!hls) state.value.error = 'Ошибка воспрои�
 
 // --- Управление --------------------------------------------------------------------
 function togglePlay() { const el = video.value; if (!el) return; if (el.paused) tryPlay(); else el.pause(); }
-function seekTo(t) { const el = video.value; if (!el || !Number.isFinite(t)) return; el.currentTime = Math.max(0, Math.min(dur.value || t, t)); state.value.time = el.currentTime; flushProgress(true); }
+function seekTo(t) { const el = video.value; if (!el || !Number.isFinite(t)) return; el.currentTime = Math.max(0, Math.min(dur.value || t, t)); state.value.time = el.currentTime; flushProgress(true); syncAlt(); }
 function seekBy(d) { seekTo((video.value?.currentTime || 0) + d); showBig(d > 0 ? 'fwd10' : 'back10'); }
-function setVolume(v) { const el = video.value; el.volume = Math.max(0, Math.min(1, v)); if (el.volume > 0) el.muted = false; }
+function setVolume(v) { const el = video.value; el.volume = Math.max(0, Math.min(1, v)); if (el.volume > 0 && !state.value.audioTrack) el.muted = false; if (altAudio) altAudio.volume = el.volume; }
 function toggleMute() { const el = video.value; el.muted = !el.muted; if (!el.muted && el.volume === 0) el.volume = 0.5; }
-function setSpeed(s) { state.value.speed = s; video.value.playbackRate = s; lsSet('speed', s); state.value.settingsOpen = ''; }
+function setSpeed(s) { state.value.speed = s; video.value.playbackRate = s; if (altAudio) altAudio.playbackRate = s; lsSet('speed', s); state.value.settingsOpen = ''; }
 function setQuality(idx) { state.value.quality = idx; if (hls) hls.currentLevel = idx; lsSet('quality', idx === -1 ? -1 : levels.value[idx]?.height); state.value.settingsOpen = ''; }
 function toggleLoop() { state.value.loop = !state.value.loop; video.value.loop = state.value.loop; }
 function setCaptions(idx) {
@@ -351,10 +449,14 @@ onMounted(() => {
   el.addEventListener('cv:direct-src', (e) => { destroySource(); state.value.error = ''; el.src = e.detail; });
   loadSource();
   loadStoryboard();
+  state.value.capSize = Number(ls('capSize', 100)) || 100;
+  state.value.capBg = Number(ls('capBg', 75));
+  applyCaptionStyle();
+  setupRemote();
   document.addEventListener('fullscreenchange', onFsChange);
   el.addEventListener('enterpictureinpicture', () => { state.value.pip = true; });
   el.addEventListener('leavepictureinpicture', () => { state.value.pip = false; });
-  progressTimer = setInterval(() => flushProgress(false), 5000);
+  progressTimer = setInterval(() => { flushProgress(false); syncAlt(); }, 5000);
   window.addEventListener('beforeunload', onUnload);
   // pagehide надёжнее beforeunload на мобильных: там вкладку часто выгружают без него
   window.addEventListener('pagehide', onUnload);
@@ -362,6 +464,7 @@ onMounted(() => {
   nextTick(() => { if (props.subtitles.length && ls('captions', null)) setCaptions(defaultCaptionIndex()); else { const tracks = el.textTracks; for (let i = 0; i < tracks.length; i++) tracks[i].mode = 'hidden'; } });
 });
 onBeforeUnmount(() => {
+  if (altAudio) { altAudio.pause(); altAudio.remove(); altAudio = null; }
   flushProgress(true);
   clearInterval(progressTimer);
   clearTimeout(hideTimer);
@@ -397,6 +500,9 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
       <div v-if="!state.playing && !state.ended && !state.error && !state.waiting" class="player-center"><button class="center-play" @click.stop="togglePlay" aria-label="Воспроизвести"><Icon name="play" :size="44" /></button></div>
       <div v-if="state.error" class="player-error"><Icon name="alertCircle" :size="40" /><p>{{ state.error }}</p><button class="btn sm" style="border-color:#fff;color:#fff" @click.stop="loadSource">Повторить</button></div>
       <div v-if="isLive" class="live-pill"><i></i> ЭФИР</div>
+      <img v-if="logo" class="player-logo" :src="logo" alt="" aria-hidden="true" />
+      <button v-if="showSkipIntro" class="skip-btn" @click.stop="skipIntro">Пропустить вступление <Icon name="next" :size="16" /></button>
+      <button v-else-if="showSkipOutro" class="skip-btn" @click.stop="skipOutro">{{ hasNext ? 'Следующее видео' : 'В конец' }} <Icon name="next" :size="16" /></button>
       <slot name="overlay" />
     </div>
 
@@ -406,6 +512,10 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
         <div class="hover-time">{{ hoverChapter ? hoverChapter.title + ' · ' : '' }}{{ fmtDuration(state.hoverTime) }}</div>
       </div>
       <div ref="bar" class="bar" :class="{ seeking: state.seeking }" @mousedown.prevent="onBarDown" @touchstart.passive="onBarDown" @mousemove="onBarHover" @mouseleave="onBarLeave">
+        <svg v-if="heatPath" class="heat" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"><path :d="heatPath" /></svg>
+        <div v-if="reactionDots.length" class="react-marks" aria-hidden="true">
+          <i v-for="(m, i) in reactionDots" :key="i" :style="{ left: m.left + '%', opacity: m.weight }" :title="`${m.total} реакц. на ${fmtDuration(m.t)}`"></i>
+        </div>
         <div class="bar-track">
           <template v-if="chapterSegments.length">
             <div v-for="(seg, i) in chapterSegments" :key="i" class="seg" :style="{ left: seg.left + '%', width: seg.width + '%' }" :title="seg.title">
@@ -432,6 +542,15 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
           <span v-if="currentChapter && !compact" class="chapter"> • {{ currentChapter.title }}</span>
         </div>
         <div class="spacer"></div>
+        <div v-if="reactionKinds.length" class="react-wrap">
+          <button class="pbtn" :class="{ on: state.reactOpen }" @click="state.reactOpen = !state.reactOpen" title="Отметить момент"><Icon name="heartOutline" :size="24" /></button>
+          <div v-if="state.reactOpen" class="react-menu">
+            <button v-for="k in reactionKinds" :key="k.id" class="react-item" :title="k.label" @click="react(k.id)">
+              <Icon :name="REACTION_ICON[k.id] || 'heart'" :size="20" /><span>{{ k.label }}</span>
+            </button>
+          </div>
+        </div>
+        <button v-if="state.remote !== 'unavailable'" class="pbtn hide-sm" :class="{ on: state.remote === 'connected' }" @click="castToTv" title="Смотреть на телевизоре"><Icon name="castTv" :size="24" /></button>
         <button v-if="subtitles.length" class="pbtn" :class="{ on: state.captions !== null }" @click="toggleCaptions" title="Субтитры (c)"><Icon :name="state.captions !== null ? 'captionsFill' : 'captions'" :size="24" /></button>
         <div class="settings-wrap">
           <button class="pbtn" :class="{ on: state.settingsOpen }" @click="state.settingsOpen = state.settingsOpen ? '' : 'main'" title="Настройки"><Icon name="settings" :size="24" /></button>
@@ -440,6 +559,8 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
               <button class="pm-item" @click="state.settingsOpen = 'speed'"><Icon name="speed" :size="18" /><span>Скорость</span><b>{{ state.speed === 1 ? 'Обычная' : state.speed + '×' }}</b><Icon name="chevronRight" :size="18" /></button>
               <button v-if="levels.length" class="pm-item" @click="state.settingsOpen = 'quality'"><Icon name="tune" :size="18" /><span>Качество</span><b>{{ qualityLabel }}</b><Icon name="chevronRight" :size="18" /></button>
               <button v-if="subtitles.length" class="pm-item" @click="state.settingsOpen = 'captions'"><Icon name="captions" :size="18" /><span>Субтитры</span><b>{{ state.captions === null ? 'Выкл.' : subtitles[state.captions]?.label }}</b><Icon name="chevronRight" :size="18" /></button>
+              <button v-if="audioTracks.length" class="pm-item" @click="state.settingsOpen = 'audio'"><Icon name="headphones" :size="18" /><span>Звук</span><b>{{ state.audioTrack ? (audioTracks.find((t) => t.id === state.audioTrack)?.label || 'Дорожка') : 'Основной' }}</b><Icon name="chevronRight" :size="18" /></button>
+              <button class="pm-item" @click="state.settingsOpen = 'capstyle'"><Icon name="tune" :size="18" /><span>Вид субтитров</span><b>{{ state.capSize }}%</b><Icon name="chevronRight" :size="18" /></button>
               <button v-if="!isLive" class="pm-item" @click="toggleLoop"><Icon name="loop" :size="18" /><span>Повтор</span><b>{{ state.loop ? 'Вкл.' : 'Выкл.' }}</b></button>
               <slot name="settings" />
             </template>
@@ -451,6 +572,18 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
               <button class="pm-item head" @click="state.settingsOpen = 'main'"><Icon name="chevronLeft" :size="18" /><span>Качество</span></button>
               <button v-for="l in levels" :key="l.index" class="pm-item" :class="{ sel: l.index === state.quality }" @click="setQuality(l.index)"><Icon name="check" :size="18" :style="l.index === state.quality ? '' : 'opacity:0'" /><span>{{ l.label }}<small v-if="l.height >= 1080" class="hd">HD</small></span></button>
               <button class="pm-item" :class="{ sel: state.quality === -1 }" @click="setQuality(-1)"><Icon name="check" :size="18" :style="state.quality === -1 ? '' : 'opacity:0'" /><span>Авто</span></button>
+            </template>
+            <template v-else-if="state.settingsOpen === 'audio'">
+              <button class="pm-item head" @click="state.settingsOpen = 'main'"><Icon name="chevronLeft" :size="18" /><span>Звуковая дорожка</span></button>
+              <button class="pm-item" :class="{ sel: !state.audioTrack }" @click="applyAudioTrack('')"><Icon name="check" :size="18" :style="!state.audioTrack ? '' : 'opacity:0'" /><span>Основная</span></button>
+              <button v-for="t in audioTracks" :key="t.id" class="pm-item" :class="{ sel: state.audioTrack === t.id }" @click="applyAudioTrack(t.id)">
+                <Icon name="check" :size="18" :style="state.audioTrack === t.id ? '' : 'opacity:0'" /><span>{{ t.label }}<small v-if="t.kind === 'description'" class="hd">описание</small></span>
+              </button>
+            </template>
+            <template v-else-if="state.settingsOpen === 'capstyle'">
+              <button class="pm-item head" @click="state.settingsOpen = 'main'"><Icon name="chevronLeft" :size="18" /><span>Вид субтитров</span></button>
+              <div class="pm-range"><span>Размер</span><input type="range" min="80" max="200" step="10" :value="state.capSize" @input="setCapSize(+$event.target.value)" aria-label="Размер субтитров" /><b>{{ state.capSize }}%</b></div>
+              <div class="pm-range"><span>Подложка</span><input type="range" min="0" max="100" step="5" :value="state.capBg" @input="setCapBg(+$event.target.value)" aria-label="Непрозрачность подложки субтитров" /><b>{{ state.capBg }}%</b></div>
             </template>
             <template v-else-if="state.settingsOpen === 'captions'">
               <button class="pm-item head" @click="state.settingsOpen = 'main'"><Icon name="chevronLeft" :size="18" /><span>Субтитры</span></button>
@@ -472,7 +605,23 @@ watch(() => props.subtitles, () => nextTick(() => { const tracks = video.value?.
 .player { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius); overflow: hidden; outline: none; user-select: none; font-family: var(--font-body); color: #fff; }
 .player.fullscreen { border-radius: 0; aspect-ratio: auto; width: 100vw; height: 100vh; }
 .player-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-.player-video::cue { background: rgba(0,0,0,0.75); color: #fff; font-family: var(--font-body); font-size: 1.05em; line-height: 1.35; }
+.player-video::cue { background: var(--cue-bg, rgba(0,0,0,0.75)); color: #fff; font-family: var(--font-body); font-size: var(--cue-size, 1.05em); line-height: 1.35; }
+.player-logo { position: absolute; top: 12px; right: 12px; height: 26px; opacity: .75; pointer-events: none; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+.skip-btn { position: absolute; right: 16px; bottom: 76px; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px;
+  background: rgba(0,0,0,0.75); color: #fff; border: 1px solid rgba(255,255,255,0.35); cursor: pointer; font-size: 14px; }
+.skip-btn:hover { background: rgba(0,0,0,0.9); }
+.heat { position: absolute; left: 0; right: 0; bottom: 6px; width: 100%; height: 22px; pointer-events: none; opacity: .55; }
+.heat path { fill: rgba(255,255,255,0.55); }
+.bar:hover .heat { opacity: .85; }
+.react-marks { position: absolute; left: 0; right: 0; bottom: 1px; height: 12px; pointer-events: none; }
+.react-marks i { position: absolute; bottom: 8px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--brand, #ffd54a); }
+.react-wrap { position: relative; }
+.react-menu { position: absolute; bottom: 46px; right: 0; background: rgba(28,28,28,0.96); border-radius: 10px; padding: 6px; min-width: 170px; display: flex; flex-direction: column; }
+.react-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: none; border: 0; color: #fff; cursor: pointer; border-radius: 8px; font-size: 14px; text-align: left; }
+.react-item:hover { background: rgba(255,255,255,0.12); }
+.pm-range { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #fff; font-size: 14px; }
+.pm-range input { flex: 1; }
+.pm-range b { min-width: 42px; text-align: right; font-weight: 500; }
 .player-surface { position: absolute; inset: 0; cursor: pointer; }
 .player.hide-controls .player-surface { cursor: none; }
 .player-spinner { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }

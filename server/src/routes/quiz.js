@@ -4,6 +4,7 @@ import { badRequest, notFound, forbidden, paging } from '../lib/util.js';
 import { canEditVideo } from '../lib/access.js';
 import { requireViewable, requireEditable } from './videos.js';
 import { markQuizPassed } from '../lib/assignments.js';
+import { markCourseQuizPassed } from '../lib/courses.js';
 import { toCsv, sendCsv } from '../lib/csv.js';
 import { audit } from '../lib/audit.js';
 import { emitEvent, eventVideo, eventUser } from '../lib/events.js';
@@ -155,7 +156,7 @@ export default async function quizRoutes(app) {
       `INSERT INTO quiz_attempts(quiz_id, video_id, user_id, answers, correct, total, percent, passed, finished_at) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,now()) RETURNING *`,
       [q.id, v.id, req.user.id, JSON.stringify(answers), r.correct, r.total, r.percent, r.passed],
     );
-    if (r.passed) await markQuizPassed(req.user.id, v.id, true);
+    if (r.passed) { await markQuizPassed(req.user.id, v.id, true); await markCourseQuizPassed(req.user.id, v.id, true).catch(() => {}); }
     await xapiStatement(r.passed ? 'passed' : 'failed', { user: req.user, video: v, result: xapiResultForQuiz(r.percent, r.passed, q.pass_percent) }).catch(() => {});
     if (r.passed) await emitEvent('quiz.passed', { video: eventVideo(v), user: eventUser(req.user), percent: r.percent, passPercent: q.pass_percent, attemptId: a.id });
     return { attempt: attemptOut(a), result: { correct: r.correct, total: r.total, percent: r.percent, passed: r.passed, passPercent: q.pass_percent, details: r.details } };

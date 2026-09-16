@@ -8,7 +8,7 @@ import Modal from './Modal.vue';
 import ChannelAvatar from './ChannelAvatar.vue';
 import { toLocalInput } from '../utils/format.js';
 
-const props = defineProps({ videoId: { type: String, default: '' }, playlistId: { type: String, default: '' }, title: { type: String, default: '' }, hasQuiz: Boolean });
+const props = defineProps({ videoId: { type: String, default: '' }, playlistId: { type: String, default: '' }, course: { type: Object, default: null }, title: { type: String, default: '' }, hasQuiz: Boolean });
 const emit = defineEmits(['close', 'created']);
 const ui = useUi();
 const auth = useAuth();
@@ -40,7 +40,7 @@ async function submit() {
   saving.value = true;
   try {
     const r = await post('/api/assignments', {
-      videoId: props.videoId || undefined, playlistId: props.playlistId || undefined,
+      videoId: props.videoId || undefined, playlistId: props.playlistId || undefined, courseId: props.course?.id || undefined,
       targets: targets.value.map((x) => ({ type: x.type, id: x.id })),
       dueAt: form.value.dueAt ? new Date(form.value.dueAt).toISOString() : null, note: form.value.note, requiredPercent: form.value.requiredPercent, requireQuiz: form.value.requireQuiz, remindDays: form.value.remindDays, attentionCheckMin: form.value.attentionCheckMin, certificate: form.value.certificate,
     });
@@ -53,7 +53,7 @@ async function submit() {
 <template>
   <Modal title="Назначить к обязательному просмотру" @close="$emit('close')">
     <div class="col gap-12">
-      <div class="small muted" v-if="title"><Icon name="assignment" :size="16" style="vertical-align:-3px" /> {{ title }}</div>
+      <div class="small muted" v-if="title || course"><Icon :name="course ? 'school' : 'assignment'" :size="16" style="vertical-align:-3px" /> {{ course ? `Курс: ${course.title}` : title }}</div>
       <div class="field">
         <label>Кому</label>
         <div class="row wrap gap-8 mb-8" v-if="targets.length">

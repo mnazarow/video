@@ -9,8 +9,8 @@ import { videoCard } from '../lib/serialize.js';
 import { config } from '../config.js';
 import { emitEvent } from '../lib/events.js';
 
-const A_SELECT = `a.*, u.display_name AS creator_name, v.short_id AS video_short_id, v.thumbnail_path`;
-const A_FROM = `assignments a LEFT JOIN users u ON u.id = a.created_by LEFT JOIN videos v ON v.id = a.video_id`;
+const A_SELECT = `a.*, u.display_name AS creator_name, v.short_id AS video_short_id, v.thumbnail_path, c.title AS course_title, c.slug AS course_slug, c.item_count AS course_item_count`;
+const A_FROM = `assignments a LEFT JOIN users u ON u.id = a.created_by LEFT JOIN videos v ON v.id = a.video_id LEFT JOIN courses c ON c.id = a.course_id`;
 
 async function loadAssignment(id) {
   return one(`SELECT ${A_SELECT} FROM ${A_FROM} WHERE a.id = $1`, [id]);
@@ -22,7 +22,7 @@ export default async function assignmentRoutes(app) {
   app.get('/assignments/mine', { preHandler: app.requireActive }, async (req) => {
     const rows = await many(
       `SELECT DISTINCT ${A_SELECT} FROM ${A_FROM} JOIN assignment_targets t ON t.assignment_id = a.id
-       WHERE a.status = 'active' AND (a.kind = 'playlist' OR v.deleted_at IS NULL)
+       WHERE a.status = 'active' AND (a.kind <> 'video' OR v.deleted_at IS NULL)
          AND (t.target_type = 'all' OR t.user_id = $1 OR (t.target_type = 'group' AND t.group_id IN (SELECT group_id FROM group_members WHERE user_id = $1)))
        ORDER BY a.due_at NULLS LAST, a.created_at DESC LIMIT 200`,
       [req.user.id],
@@ -51,7 +51,7 @@ export default async function assignmentRoutes(app) {
     if (mineOnly) { params.push(req.user.id); where.push(`a.created_by = $${params.length}`); }
     if (status) { params.push(status); where.push(`a.status = $${params.length}`); }
     if (req.query.videoId) { params.push(String(req.query.videoId)); where.push(`a.video_id::text = $${params.length}`); }
-    where.push(`(a.kind = 'playlist' OR v.deleted_at IS NULL)`);
+    where.push(`(a.kind <> 'video' OR v.deleted_at IS NULL)`);
     const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = await one(`SELECT count(*)::int AS n FROM ${A_FROM} ${w}`, params);
     params.push(limit, offset);
@@ -70,9 +70,15 @@ export default async function assignmentRoutes(app) {
   app.post('/assignments', { preHandler: app.requireActive }, async (req) => {
     if (!canAssign(req.user, req.settings)) throw forbidden('Назначать видео к просмотру могут модераторы и администраторы');
     const b = req.body || {};
-    const kind = b.playlistId ? 'playlist' : 'video';
+    const kind = b.courseId ? 'course' : (b.playlistId ? 'playlist' : 'video');
     let title = '';
-    if (kind === 'video') {
+    if (kind === 'course') {
+      const c = await one('SELECT * FROM courses WHERE id::text = $1 OR slug = $1', [String(b.courseId)]);
+      if (!c) throw notFound('Курс не найден');
+      if (c.status !== 'published') throw badRequest('Сначала опубликуйте курс');
+      if (c.owner_id !== req.user.id && !isStaff(req.user) && c.visibility === 'private') throw forbidden('Курс недоступен для назначения');
+      b.courseId = c.id; title = c.title;
+    } else if (kind === 'video') {
       const v = await one('SELECT * FROM videos WHERE (id::text = $1 OR short_id = $1) AND deleted_at IS NULL', [String(b.videoId || '')]);
       if (!v) throw notFound('Видео не найдено');
       if (!canEditVideo(v, req.user) && !['public', 'internal'].includes(v.visibility)) throw forbidden('Можно назначать только свои видео или видео, доступные сотрудникам');
@@ -102,10 +108,10 @@ export default async function assignmentRoutes(app) {
     const remind = Math.min(30, Math.max(0, Number(b.remindDays ?? req.settings['assignments.remind_days'] ?? 3)));
     const a = await tx(async (c) => {
       const row = await c.one(
-        `INSERT INTO assignments(kind, video_id, playlist_id, title, note, created_by, due_at, required_percent, require_quiz, remind_days, attention_check_min, certificate)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        `INSERT INTO assignments(kind, video_id, playlist_id, course_id, title, note, created_by, due_at, required_percent, require_quiz, remind_days, attention_check_min, certificate)
+         VALUES ($1,$2,$3,$13,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
         [kind, kind === 'video' ? b.videoId : null, kind === 'playlist' ? b.playlistId : null, title, String(b.note || '').slice(0, 2000), req.user.id, due, percent, !!b.requireQuiz, remind,
-          Math.min(60, Math.max(0, Number(b.attentionCheckMin) || 0)), !!b.certificate && !!req.settings['certificates.enabled']],
+          Math.min(60, Math.max(0, Number(b.attentionCheckMin) || 0)), !!b.certificate && !!req.settings['certificates.enabled'], kind === 'course' ? b.courseId : null],
       );
       for (const t of targets) {
         if (t.type === 'all') await c.query(`INSERT INTO assignment_targets(assignment_id, target_type) VALUES ($1,'all')`, [row.id]);

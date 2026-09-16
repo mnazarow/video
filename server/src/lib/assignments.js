@@ -18,9 +18,16 @@ export async function resolveTargetUsers(assignmentId) {
   );
 }
 
-/** Видео, входящие в назначение (одно видео или содержимое плейлиста). */
+/** Видео, входящие в назначение (одно видео, содержимое плейлиста или видео-шаги курса). */
 export async function assignmentVideos(a) {
   if (a.kind === 'video') return many(`SELECT id, title, duration, short_id FROM videos WHERE id = $1 AND deleted_at IS NULL`, [a.video_id]);
+  if (a.kind === 'course') {
+    return many(
+      `SELECT v.id, v.title, v.duration, v.short_id FROM course_items ci JOIN videos v ON v.id = ci.video_id
+       WHERE ci.course_id = $1 AND ci.kind = 'video' AND ci.required AND v.deleted_at IS NULL AND v.status = 'ready' ORDER BY ci.position`,
+      [a.course_id],
+    );
+  }
   return many(
     `SELECT v.id, v.title, v.duration, v.short_id FROM playlist_items pi JOIN videos v ON v.id = pi.video_id
      WHERE pi.playlist_id = $1 AND v.deleted_at IS NULL AND v.status = 'ready' ORDER BY pi.position`,
@@ -32,7 +39,8 @@ export async function assignmentVideos(a) {
 export async function assignmentsForUserVideo(userId, videoId) {
   return many(
     `SELECT DISTINCT a.* FROM assignments a JOIN assignment_targets t ON t.assignment_id = a.id
-     WHERE a.status = 'active' AND (a.video_id = $2 OR a.playlist_id IN (SELECT playlist_id FROM playlist_items WHERE video_id = $2))
+     WHERE a.status = 'active' AND (a.video_id = $2 OR a.playlist_id IN (SELECT playlist_id FROM playlist_items WHERE video_id = $2)
+            OR a.course_id IN (SELECT course_id FROM course_items WHERE video_id = $2 AND kind = 'video'))
        AND (t.target_type = 'all' OR t.user_id = $1 OR (t.target_type = 'group' AND t.group_id IN (SELECT group_id FROM group_members WHERE user_id = $1)))`,
     [userId, videoId],
   );
@@ -85,6 +93,18 @@ export async function seedProgress(a) {
   const users = await resolveTargetUsers(a.id);
   const videos = await assignmentVideos(a);
   let seeded = 0;
+  // Курс: записываем адресатов на курс и пересчитываем их прогресс по шагам
+  if (a.kind === 'course' && a.course_id) {
+    const { enroll, updateCourseProgressForVideo } = await import('./courses.js');
+    for (const u of users) await enroll(a.course_id, u.id);
+    for (const v of videos) {
+      const vid = await one('SELECT * FROM videos WHERE id = $1', [v.id]);
+      for (const u of users) {
+        const row = await one('SELECT max(max_position)::float AS m FROM video_views WHERE video_id = $1 AND user_id = $2', [v.id, u.id]);
+        if (row?.m) await updateCourseProgressForVideo(u.id, vid, row.m).catch(() => {});
+      }
+    }
+  }
   for (const v of videos) {
     const duration = Number(v.duration) || 0;
     for (const u of users) {
@@ -220,10 +240,17 @@ export async function assignmentTargets(ids) {
   return map;
 }
 
+/** Ссылка на содержимое назначения: видео, плейлист или курс. */
+async function assignmentLink(a) {
+  if (a.kind === 'video') return `/watch/${(await one('SELECT short_id FROM videos WHERE id = $1', [a.video_id]))?.short_id}`;
+  if (a.kind === 'course') { const c = await one('SELECT slug, id FROM courses WHERE id = $1', [a.course_id]); return `/course/${c?.slug || a.course_id}`; }
+  return `/playlist/${a.playlist_id}`;
+}
+
 /** Уведомить адресатов о новом назначении. */
 export async function notifyAssigned(a, actorId) {
   const users = await resolveTargetUsers(a.id);
-  const link = a.kind === 'video' ? `/watch/${(await one('SELECT short_id FROM videos WHERE id = $1', [a.video_id]))?.short_id}` : `/playlist/${a.playlist_id}`;
+  const link = await assignmentLink(a);
   const due = a.due_at ? ` до ${new Date(a.due_at).toLocaleDateString('ru-RU')}` : '';
   const s = await loadSettings();
   for (const u of users) {
@@ -239,7 +266,7 @@ export async function notifyAssigned(a, actorId) {
 export async function remindAssignment(a, settings = null) {
   const s = settings || await loadSettings();
   const report = await assignmentReport(a);
-  const link = a.kind === 'video' ? `/watch/${(await one('SELECT short_id FROM videos WHERE id = $1', [a.video_id]))?.short_id}` : `/playlist/${a.playlist_id}`;
+  const link = await assignmentLink(a);
   const due = a.due_at ? ` до ${new Date(a.due_at).toLocaleDateString('ru-RU')}` : '';
   let sent = 0;
   for (const p of report.people) {
@@ -268,7 +295,7 @@ export async function sendReminders() {
 
 export function assignmentOut(a, extra = {}) {
   return {
-    id: a.id, kind: a.kind, videoId: a.video_id, playlistId: a.playlist_id, title: a.title, note: a.note,
+    id: a.id, kind: a.kind, videoId: a.video_id, playlistId: a.playlist_id, courseId: a.course_id, title: a.title, note: a.note,
     dueAt: a.due_at, requiredPercent: a.required_percent, requireQuiz: a.require_quiz, remindDays: a.remind_days,
     attentionCheckMin: a.attention_check_min || 0, certificate: !!a.certificate,
     status: a.status, createdAt: a.created_at, createdBy: a.created_by, creatorName: a.creator_name,

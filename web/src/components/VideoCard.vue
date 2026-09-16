@@ -2,6 +2,8 @@
 import { computed, ref, onBeforeUnmount } from 'vue';
 import { fmtDuration, fmtViews, timeAgo, VISIBILITY, STATUS } from '../utils/format.js';
 import ChannelAvatar from './ChannelAvatar.vue';
+import { useRouter } from 'vue-router';
+import { get } from '../api.js';
 import { useUi } from '../stores/ui.js';
 import { useAuth } from '../stores/auth.js';
 
@@ -10,9 +12,24 @@ const props = defineProps({
   layout: { type: String, default: 'grid' }, // grid | list | shorts
   showChannel: { type: Boolean, default: true },
   showStatus: { type: Boolean, default: false },
+  searchQuery: { type: String, default: '' },   // 1.4: включает кнопку «Перейти к моменту»
   playlistId: { type: String, default: '' },
 });
 const to = computed(() => ({ name: 'watch', params: { id: props.video.shortId }, query: props.playlistId ? { list: props.playlistId } : {} }));
+
+// 1.4: найденная фраза → открыть видео с нужной секунды
+const router = useRouter();
+const jumping = ref(false);
+async function jumpToMoment() {
+  if (!props.searchQuery) return;
+  jumping.value = true;
+  try {
+    const r = await get(`/api/videos/${props.video.shortId}/moment?q=${encodeURIComponent(props.searchQuery)}`);
+    const at = r.at;
+    router.push({ name: 'watch', params: { id: props.video.shortId }, query: at != null ? { t: Math.max(0, Math.floor(at)) } : {} });
+    if (at == null) ui.toast('Точный момент найти не удалось — открыли видео сначала');
+  } catch (e) { ui.toast(e.message, { type: 'error' }); } finally { jumping.value = false; }
+}
 const dueClass = computed(() => {
   if (!props.video.dueAt) return '';
   const d = new Date(props.video.dueAt) - Date.now();
@@ -108,8 +125,12 @@ const meta = computed(() => {
             <span class="badge" :class="{ brand: video.visibility === 'public' }"><Icon :name="VISIBILITY[video.visibility]?.icon" :size="12" /> {{ VISIBILITY[video.visibility]?.label }}</span>
           </div>
           <p v-if="layout === 'list' && video.description" class="vc-desc clamp-2">{{ video.description }}</p>
-          <p v-if="video.transcriptHit" class="vc-hit small" v-html="'…' + video.transcriptHit + '…'"></p>
-          <p v-if="video.screenTextHit" class="vc-hit small" :title="'Текст на экране'"><Icon name="ocr" :size="12" style="vertical-align:-2px" /> <span v-html="'…' + video.screenTextHit + '…'"></span></p>
+          <p v-if="video.transcriptHit" class="vc-hit small"><span v-html="'…' + video.transcriptHit + '…'"></span>
+            <button v-if="searchQuery" class="hit-jump" :disabled="jumping" @click.prevent.stop="jumpToMoment">{{ jumping ? 'Ищу…' : 'Перейти к моменту' }}</button>
+          </p>
+          <p v-if="video.screenTextHit" class="vc-hit small" :title="'Текст на экране'"><Icon name="ocr" :size="12" style="vertical-align:-2px" /> <span v-html="'…' + video.screenTextHit + '…'"></span>
+            <button v-if="searchQuery && !video.transcriptHit" class="hit-jump" :disabled="jumping" @click.prevent.stop="jumpToMoment">{{ jumping ? 'Ищу…' : 'Перейти к моменту' }}</button>
+          </p>
         </div>
       </div>
       <slot name="menu" />
@@ -140,6 +161,8 @@ const meta = computed(() => {
 .vc-channel { display: block; color: var(--text-2); }
 .vc-channel:hover { color: var(--text); }
 .vc-desc { margin: 6px 0 0; color: var(--text-3); font-size: 13px; }
+.hit-jump { margin-left: 6px; border: 0; background: none; padding: 0; color: var(--brand); cursor: pointer; font: inherit; font-size: 12px; }
+.hit-jump:hover { text-decoration: underline; }
 .vc-hit { margin: 6px 0 0; color: var(--text-2); }
 .vc-hit b { color: var(--brand); font-weight: 500; }
 .vcard.list { flex-direction: row; gap: 16px; }

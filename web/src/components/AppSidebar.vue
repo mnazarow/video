@@ -27,6 +27,7 @@ const main = [
   { to: '/subscriptions', icon: 'subscriptions', label: 'Подписки', auth: true },
   { to: '/live', icon: 'live', label: 'Трансляции' },
   { to: '/shorts', icon: 'shorts', label: 'Короткие' },
+  { to: '/courses', icon: 'school', label: 'Курсы', courses: true },
 ];
 const library = [
   { to: '/assignments', icon: 'assignment', label: 'Назначено мне', badge: 'assignments' },
@@ -43,7 +44,7 @@ const library = [
   <aside class="app-sidebar" :class="{ mini }">
     <nav class="sb-scroll">
       <div class="sb-group">
-        <router-link v-for="m in main.filter((x) => !x.auth || auth.isActive)" :key="m.to" :to="m.to" class="sb-item" :class="{ 'router-link-active': $route.path === m.to }" :exact-active-class="'router-link-active'" active-class="">
+        <router-link v-for="m in main.filter((x) => (!x.auth || auth.isActive) && (!x.courses || auth.config?.coursesEnabled !== false))" :key="m.to" :to="m.to" class="sb-item" :class="{ 'router-link-active': $route.path === m.to }" :exact-active-class="'router-link-active'" active-class="">
           <Icon :name="m.icon" /><span>{{ m.label }}</span>
         </router-link>
       </div>

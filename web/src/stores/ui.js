@@ -11,6 +11,7 @@ function writeLS(key, val) {
 export const useUi = defineStore('ui', {
   state: () => ({
     theme: readLS('cv:theme', 'light'),
+    highContrast: readLS('cv:a11y:contrast', '0') === '1',   // 1.4: режим повышенной контрастности
     sidebarCollapsed: readLS('cv:sidebar', '0') === '1',
     sidebarOpen: false, // мобильный ящик
     toasts: [],
@@ -31,6 +32,11 @@ export const useUi = defineStore('ui', {
       document.documentElement.setAttribute('data-theme', this.effectiveTheme);
     },
     toggleTheme() { this.setTheme(this.effectiveTheme === 'dark' ? 'light' : 'dark'); },
+    setHighContrast(v) {
+      this.highContrast = !!v;
+      writeLS('cv:a11y:contrast', this.highContrast ? '1' : '0');
+      document.documentElement.classList.toggle('high-contrast', this.highContrast);
+    },
     toggleSidebar() {
       if (window.innerWidth < 1024) this.sidebarOpen = !this.sidebarOpen;
       else { this.sidebarCollapsed = !this.sidebarCollapsed; writeLS('cv:sidebar', this.sidebarCollapsed ? '1' : '0'); }
