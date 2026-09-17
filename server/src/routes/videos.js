@@ -473,6 +473,17 @@ export default async function videoRoutes(app) {
     return { subtitle: subtitleOut(updated) };
   });
 
+  /** Автоглавы по сменам кадра (слайдам) — как «умные главы» Panopto (1.8). */
+  app.post('/:id/chapters/auto', { preHandler: app.requireActive }, async (req) => {
+    const v = await requireEditable(req, req.params.id);
+    if (!req.settings['chapters.auto_enabled']) throw badRequest('Автоглавы отключены администратором');
+    if (v.status !== 'ready') throw badRequest('Видео ещё обрабатывается');
+    if (Number(v.duration) < 60) throw badRequest('Для коротких видео главы не нужны');
+    const job = await enqueue('auto_chapters', { videoId: v.id, threshold: Number(req.body?.threshold) || 0.4 }, { videoId: v.id, dedupe: true });
+    await audit(req, 'chapters.auto', { targetType: 'video', targetId: v.id });
+    return { jobId: job?.id || null, status: 'queued' };
+  });
+
   app.post('/:id/subtitles/auto', { preHandler: app.requireActive }, async (req) => {
     const v = await requireEditable(req, req.params.id);
     if (!req.settings['asr.enabled']) throw forbidden('Автоматические субтитры отключены администратором');

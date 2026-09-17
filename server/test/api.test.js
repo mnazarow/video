@@ -1718,6 +1718,126 @@ test('итоги встречи и автоклипы: разбор ответа
   assert.equal(typeof notesGet.json.enabled, 'boolean');
 });
 
+test('согласование видео: отправка, замечания, решения и права', async () => {
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) > 3);
+  assert.ok(v, 'нужно готовое видео');
+  const me = await user.get('/api/auth/me');
+  const reviewerId = me.json.user.id;
+
+  const empty = await admin.post(`/api/videos/${v.id}/review`, { reviewers: [] });
+  assert.equal(empty.status, 400, 'без рецензентов нельзя');
+
+  const sent = await admin.post(`/api/videos/${v.id}/review`, { reviewers: [reviewerId], note: 'Проверьте формулировки', dueAt: new Date(Date.now() + 86400000).toISOString() });
+  assert.equal(sent.status, 200, sent.text);
+  assert.equal(sent.json.review.status, 'in_review');
+  assert.equal(sent.json.review.reviewers.length, 1);
+
+  // Видео помечено как «на согласовании»
+  const card = await admin.get(`/api/videos/${v.shortId}`);
+  assert.equal(card.json.video.reviewStatus, 'in_review');
+
+  // Замечание с таймкодом от рецензента
+  const c = await user.post(`/api/videos/${v.id}/review/comments`, { at: 2, body: 'На второй секунде не видно подписи' });
+  assert.equal(c.status, 200, c.text);
+  assert.equal(c.json.review.comments.length, 1);
+  assert.equal(c.json.review.comments[0].at, 2);
+  const empty2 = await user.post(`/api/videos/${v.id}/review/comments`, { body: '  ' });
+  assert.equal(empty2.status, 400, 'пустое замечание отклонено');
+
+  // Автор отмечает исправленным
+  const resolved = await admin.patch(`/api/videos/${v.id}/review/comments/${c.json.review.comments[0].id}`, { resolved: true });
+  assert.equal(resolved.json.review.comments[0].resolved, true);
+  const byUser = await user.patch(`/api/videos/${v.id}/review/comments/${c.json.review.comments[0].id}`, { resolved: false });
+  assert.equal(byUser.status, 403, 'отмечать исправленным может автор');
+
+  // «Вернуть на доработку» требует комментария
+  const noComment = await user.post(`/api/videos/${v.id}/review/decision`, { decision: 'changes_requested', comment: '' });
+  assert.equal(noComment.status, 400, 'нужно написать, что исправить');
+  const back = await user.post(`/api/videos/${v.id}/review/decision`, { decision: 'changes_requested', comment: 'Добавьте титры' });
+  assert.equal(back.status, 200, back.text);
+  assert.equal(back.json.review.status, 'changes_requested');
+  const card2 = await admin.get(`/api/videos/${v.shortId}`);
+  assert.equal(card2.json.video.reviewStatus, 'changes_requested');
+
+  // Повторная отправка и согласование
+  const again = await admin.post(`/api/videos/${v.id}/review`, { reviewers: [reviewerId] });
+  assert.equal(again.status, 200, again.text);
+  const ok = await user.post(`/api/videos/${v.id}/review/decision`, { decision: 'approved', comment: 'Годится' });
+  assert.equal(ok.json.review.status, 'approved');
+
+  // Списки: рецензент видит входящие, автор — исходящие
+  const mineLists = await user.get('/api/studio/reviews');
+  assert.equal(mineLists.status, 200, mineLists.text);
+  assert.ok(Array.isArray(mineLists.json.incoming));
+  const authorLists = await admin.get('/api/studio/reviews');
+  assert.ok(Array.isArray(authorLists.json.outgoing));
+
+  // Посторонний не видит согласование и не принимает решений
+  const stranger = await guest.get(`/api/videos/${v.shortId}/review`);
+  assert.equal(stranger.status, 401, 'гостю согласование недоступно');
+  const notReviewer = await admin.post(`/api/videos/${v.id}/review/decision`, { decision: 'approved' });
+  assert.equal(notReviewer.status, 400, 'решать нечего — согласование завершено');
+  await admin.del(`/api/videos/${v.id}/review`);
+});
+
+test('календарь публикаций, карточки мессенджеров и хранилище', async () => {
+  // Календарь: события в заданном периоде
+  const cal = await admin.get('/api/studio/calendar');
+  assert.equal(cal.status, 200, cal.text);
+  assert.ok(Array.isArray(cal.json.events), 'события списком');
+  assert.ok(cal.json.events.every((e) => ['publish', 'premiere', 'live', 'assignment', 'review'].includes(e.kind)), 'известные виды событий');
+  const bad = await admin.get('/api/studio/calendar?from=нет');
+  assert.equal(bad.status, 400, 'некорректный период отклонён');
+
+  // Карточки для мессенджеров
+  const { toSlack, toTeams, describeEvent, formatPayload } = await import('../src/lib/chatcards.js');
+  const payload = { data: { video: { title: 'Инструктаж по охране труда', shortId: 'abc123', url: '/watch/abc123', owner: 'Мария Соколова' }, by: 'Иван Петров' } };
+  const slack = toSlack('review.approved', payload, 'Видео');
+  assert.equal(slack.username, 'Видео');
+  assert.match(slack.text, /Видео согласовано/);
+  assert.equal(slack.attachments[0].title, 'Инструктаж по охране труда');
+  assert.match(slack.attachments[0].title_link, /\/watch\/abc123$/, 'ссылка абсолютная');
+  assert.ok(slack.attachments[0].fields.some((f) => f.value === 'Иван Петров'), 'кто принял решение');
+
+  const teams = toTeams('video.published', payload, 'Видео');
+  assert.equal(teams.type, 'message');
+  assert.equal(teams.attachments[0].contentType, 'application/vnd.microsoft.card.adaptive');
+  assert.equal(teams.attachments[0].content.type, 'AdaptiveCard');
+  assert.equal(teams.attachments[0].content.actions[0].type, 'Action.OpenUrl');
+  assert.match(teams.attachments[0].content.body[0].text, /Опубликовано видео/);
+
+  const raw = formatPayload('json', 'video.published', payload, 'Видео');
+  assert.deepEqual(raw, payload, 'для JSON тело не меняется');
+  const unknown = describeEvent('какое.то.событие', {});
+  assert.equal(unknown.title, 'какое.то.событие', 'незнакомое событие не ломает карточку');
+
+  // Хранилище: сводка и права
+  const st = await admin.get('/api/admin/storage');
+  assert.equal(st.status, 200, st.text);
+  assert.ok(st.json.totals.videos > 0, 'видео посчитаны');
+  assert.ok(st.json.totals.bytes >= 0);
+  assert.ok(Array.isArray(st.json.byOwner) && st.json.byOwner.length, 'есть разрез по каналам');
+  assert.ok(Array.isArray(st.json.biggest), 'есть список тяжёлых видео');
+  const byUser = await user.get('/api/admin/storage');
+  assert.equal(byUser.status, 403, 'раздел только для модераторов');
+
+  // Автоглавы: понятные отказы
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const short = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) < 60);
+  if (short) {
+    const r = await admin.post(`/api/videos/${short.id}/chapters/auto`, {});
+    assert.equal(r.status, 400, 'для коротких видео главы не нужны');
+  }
+  const { parseScenes, scenesToChapters } = await import('../src/jobs/chapters.js');
+  assert.deepEqual(parseScenes('frame:0 pts_time:24.5\nlavfi.scene_score=0.4\nframe:1 pts_time:80.2'), [24.5, 80.2]);
+  const chapters = scenesToChapters([24.5, 30.0, 80.2], { duration: 120, segments: [{ start: 25, text: 'Переходим к согласованию заявок' }] });
+  assert.equal(chapters.length, 3, 'близкие смены сцены слиты, первая глава — с нуля');
+  assert.equal(chapters[0].start, 0);
+  assert.equal(chapters[1].title, 'Переходим к согласованию заявок');
+  assert.equal(chapters[2].title, 'Часть 3', 'без расшифровки — номер части');
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);

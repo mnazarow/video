@@ -10,6 +10,8 @@ const NAV = [
   { to: '/studio/live', label: 'Трансляции', icon: 'broadcast', live: true },
   { to: '/studio/assignments', label: 'Обязательные просмотры', icon: 'clipboardList', assign: true },
   { to: '/studio/courses', label: 'Курсы', icon: 'school', assign: true },
+  { to: '/studio/reviews', label: 'Согласования', icon: 'checkAll', review: true },
+  { to: '/studio/calendar', label: 'Календарь', icon: 'calendar' },
   { to: '/studio/playlists', label: 'Плейлисты', icon: 'playlist' },
   { to: '/studio/comments', label: 'Комментарии', icon: 'comment' },
   { to: '/studio/analytics', label: 'Аналитика', icon: 'analytics' },
@@ -27,7 +29,7 @@ const NAV = [
         </div>
         <nav class="side-nav">
           <template v-for="n in NAV" :key="n.to">
-            <router-link v-if="(!n.upload || auth.canUpload) && (!n.live || (auth.canStream && auth.config?.liveEnabled)) && (!n.assign || auth.canAssign)" :to="n.to" :class="{ 'router-link-active': n.exact ? $route.path === n.to : $route.path.startsWith(n.to) }" active-class=""><Icon :name="n.icon" :size="20" /> {{ n.label }}</router-link>
+            <router-link v-if="(!n.upload || auth.canUpload) && (!n.live || (auth.canStream && auth.config?.liveEnabled)) && (!n.assign || auth.canAssign) && (!n.review || auth.config?.reviewEnabled !== false)" :to="n.to" :class="{ 'router-link-active': n.exact ? $route.path === n.to : $route.path.startsWith(n.to) }" active-class=""><Icon :name="n.icon" :size="20" /> {{ n.label }}</router-link>
           </template>
         </nav>
       </div>

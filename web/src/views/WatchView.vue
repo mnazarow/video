@@ -23,6 +23,7 @@ import QuizOverlay from '../components/watch/QuizOverlay.vue';
 import NotesPanel from '../components/watch/NotesPanel.vue';
 import PremiereChat from '../components/watch/PremiereChat.vue';
 import MeetingNotes from '../components/watch/MeetingNotes.vue';
+import ReviewPanel from '../components/watch/ReviewPanel.vue';
 import ScenarioOverlay from '../components/watch/ScenarioOverlay.vue';
 import ViewerWatermark from '../components/watch/ViewerWatermark.vue';
 import AssignDialog from '../components/AssignDialog.vue';
@@ -471,6 +472,7 @@ onBeforeUnmount(() => { clearInterval(premiereTimer); clearInterval(countdownTim
           </h1>
           <PremiereChat v-if="premiere?.chatEnabled && (premiereWaiting || premiereLive)" :video="video" :compact="premiereLive" class="mb-16" />
           <MeetingNotes v-if="auth.isActive && auth.config?.meetingNotes !== false && video.status === 'ready' && (video.hasNotes || video.viewer?.isOwner || auth.isStaff)" :video="video" :player="player" class="mb-16" />
+          <ReviewPanel v-if="auth.isActive && auth.config?.reviewEnabled !== false && video.status === 'ready' && (video.viewer?.isOwner || auth.isStaff || video.reviewStatus)" :video="video" :player="player" class="mb-16" />
           <div class="watch-row">
             <div class="row gap-16 watch-owner">
               <router-link :to="`/@${video.owner.handle}`"><ChannelAvatar :user="video.owner" size="lg" /></router-link>

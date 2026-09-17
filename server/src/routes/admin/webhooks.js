@@ -9,7 +9,7 @@ import { config } from '../../config.js';
 
 /** Секрет подписи наружу не отдаём: в списке — только подсказка, целиком — отдельным запросом (с записью в журнал). */
 function hookOut(h, { secret = false } = {}) {
-  const out = { id: h.id, name: h.name, url: h.url, secretHint: h.secret ? `${String(h.secret).slice(0, 6)}…` : '', events: h.events || [], enabled: h.enabled, createdAt: h.created_at, lastStatus: h.last_status, lastAt: h.last_at, failCount: h.fail_count, deliveries: h.deliveries ?? undefined, failed: h.failed ?? undefined };
+  const out = { id: h.id, name: h.name, url: h.url, secretHint: h.secret ? `${String(h.secret).slice(0, 6)}…` : '', events: h.events || [], enabled: h.enabled, createdAt: h.created_at, lastStatus: h.last_status, lastAt: h.last_at, failCount: h.fail_count, format: h.format || 'json', deliveries: h.deliveries ?? undefined, failed: h.failed ?? undefined };
   if (secret) out.secret = h.secret;
   return out;
 }
@@ -19,6 +19,8 @@ function deliveryOut(d) {
 function validUrl(u) {
   try { const x = new URL(String(u)); return ['http:', 'https:'].includes(x.protocol) ? x.toString() : null; } catch { return null; }
 }
+
+const FORMATS = ['json', 'slack', 'mattermost', 'teams'];
 
 export default async function adminWebhookRoutes(app) {
   app.get('/webhooks/events', { preHandler: app.requireAdmin }, async () => ({ events: WEBHOOK_EVENTS.map(([id, label]) => ({ id, label })) }));
@@ -34,7 +36,8 @@ export default async function adminWebhookRoutes(app) {
     const name = String(b.name || '').trim().slice(0, 100) || new URL(url).host;
     const events = Array.isArray(b.events) ? b.events.filter(isWebhookEvent) : [];
     const secret = String(b.secret || '').trim() || randomToken(24);
-    const h = await one('INSERT INTO webhooks(name, url, secret, events, enabled, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [name, url, secret, events, b.enabled !== false, req.user.id]);
+    const format = FORMATS.includes(b.format) ? b.format : 'json';
+    const h = await one('INSERT INTO webhooks(name, url, secret, events, enabled, created_by, format) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [name, url, secret, events, b.enabled !== false, req.user.id, format]);
     await audit(req, 'webhook.create', { targetType: 'webhook', targetId: h.id, details: { name, url, events } });
     return { webhook: hookOut(h, { secret: true }) };
   });
@@ -50,6 +53,7 @@ export default async function adminWebhookRoutes(app) {
     if (b.secret !== undefined) add('secret', String(b.secret).trim() || randomToken(24));
     if (b.events !== undefined) add('events', Array.isArray(b.events) ? b.events.filter(isWebhookEvent) : []);
     if (b.enabled !== undefined) { add('enabled', !!b.enabled); if (b.enabled) add('fail_count', 0); }
+    if (b.format !== undefined && FORMATS.includes(b.format)) add('format', b.format);
     if (sets.length) await query(`UPDATE webhooks SET ${sets.join(', ')} WHERE id = $1`, params);
     await audit(req, 'webhook.update', { targetType: 'webhook', targetId: h.id, details: Object.keys(b) });
     return { webhook: hookOut(await one('SELECT * FROM webhooks WHERE id = $1', [h.id])) };

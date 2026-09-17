@@ -2,8 +2,9 @@
 // Событие → записи в webhook_deliveries → задание воркера `webhook_deliver` с HMAC-подписью и повторами.
 import crypto from 'node:crypto';
 import { one, many, query } from '../db.js';
+import { formatPayload } from './chatcards.js';
 import { enqueue } from './jobs.js';
-import { getSettingSync } from './settings.js';
+import { getSettingSync, getSettings } from './settings.js';
 import { config } from '../config.js';
 
 export const WEBHOOK_EVENTS = [
@@ -23,6 +24,9 @@ export const WEBHOOK_EVENTS = [
   ['user.registered', 'Новая регистрация'],
   ['user.approved', 'Учётная запись одобрена'],
   ['webhook.test', 'Проверочное событие'],
+  ['review.requested', 'Видео отправлено на согласование'],
+  ['review.approved', 'Видео согласовано'],
+  ['review.changes_requested', 'Видео вернули на доработку'],
 ];
 const EVENT_SET = new Set(WEBHOOK_EVENTS.map((e) => e[0]));
 
@@ -53,10 +57,15 @@ export function signPayload(secret, timestamp, body) {
 
 /** Отправка одной доставки (задание воркера). */
 export async function deliverWebhook(job) {
-  const d = await one('SELECT d.*, w.url, w.secret, w.enabled FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id WHERE d.id = $1', [job.payload.deliveryId]);
+  const d = await one('SELECT d.*, w.url, w.secret, w.enabled, w.format FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id WHERE d.id = $1', [job.payload.deliveryId]);
   if (!d) return { skipped: 'missing' };
   if (!d.enabled) { await query(`UPDATE webhook_deliveries SET status = 'failed', response = 'вебхук отключён' WHERE id = $1`, [d.id]); return { skipped: 'disabled' }; }
-  const body = JSON.stringify({ ...d.payload, deliveryId: d.id, attempt: job.attempts });
+  // Формат доставки: обычный JSON или карточка мессенджера (Slack, Mattermost, Teams)
+  const format = d.format || 'json';
+  const siteName = (await getSettings('site.'))['site.name'] || 'CorpVideo';
+  const body = format === 'json'
+    ? JSON.stringify({ ...d.payload, deliveryId: d.id, attempt: job.attempts })
+    : JSON.stringify(formatPayload(format, d.event, d.payload, siteName));
   const ts = Math.floor(Date.now() / 1000);
   const headers = {
     'content-type': 'application/json',

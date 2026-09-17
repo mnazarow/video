@@ -3,7 +3,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { one, query, many, publish, withLock } from '../db.js';
 import { sendMailNow } from '../lib/mailer.js';
-import { storage, ensureDir, exists, removeDir } from '../lib/storage.js';
+import { storage, ensureDir, exists, removeDir, removeFile } from '../lib/storage.js';
 import { loadSettings } from '../lib/settings.js';
 import { enqueue } from '../lib/jobs.js';
 import { notifySubscribersNewVideo, notifyPremiereAudience, notify } from '../lib/notify.js';
@@ -172,6 +172,24 @@ async function maintenanceBody(job, ctx) {
     await query(`UPDATE watch_parties SET ended_at = now(), playing = false WHERE ended_at IS NULL AND updated_at < now() - interval '12 hours'`);
     await query(`DELETE FROM watch_parties WHERE ended_at IS NOT NULL AND ended_at < now() - interval '30 days'`);
     await query(`DELETE FROM room_messages WHERE room LIKE 'party:%' AND created_at < now() - interval '30 days'`);
+    // 1.8: исходники старше заданного срока удаляем — HLS и mp4 остаются, место освобождается
+    const origDays = Number(s['storage.originals_days']) || 0;
+    if (origDays > 0) {
+      const old = await many(
+        `SELECT id, original_path, storage_bytes FROM videos
+         WHERE original_kept = true AND original_path IS NOT NULL AND status = 'ready' AND deleted_at IS NULL
+           AND created_at < now() - ($1 || ' days')::interval LIMIT 50`, [String(origDays)]);
+      for (const v of old) {
+        try {
+          const abs = storage.abs(v.original_path);
+          const st = await fsp.stat(abs).catch(() => null);
+          await removeFile(abs);
+          await query('UPDATE videos SET original_kept = false, original_path = NULL, storage_bytes = greatest(0, storage_bytes - $2) WHERE id = $1',
+            [v.id, st ? st.size : 0]);
+        } catch (e) { ctx?.log?.warn({ err: e.message, videoId: v.id }, 'originals cleanup'); }
+      }
+      out.originalsRemoved = old.length;
+    }
     await query(`DELETE FROM search_history WHERE created_at < now() - interval '180 days'`);
     // Корзина: окончательно удаляем видео, стёртые давнее retention.trash_days (файлы и записи)
     const trashDays = Math.max(1, Number(s['retention.trash_days']) || 30);

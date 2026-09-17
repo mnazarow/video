@@ -9,7 +9,9 @@ import { copyWithToast } from '../../utils/clipboard.js';
 const ui = useUi();
 const hooks = ref([]);
 const events = ref([]);
-const form = ref({ name: '', url: '', secret: '', events: [] });
+const form = ref({ name: '', url: '', secret: '', events: [], format: 'json' });
+// 1.8: формат доставки — обычный JSON или карточка мессенджера
+const FORMATS = [['json', 'JSON (для систем и интеграций)'], ['slack', 'Slack'], ['mattermost', 'Mattermost'], ['teams', 'Microsoft Teams']];
 const showForm = ref(false);
 const deliveries = ref({ hook: null, list: [], open: null });
 const saving = ref(false);
@@ -29,7 +31,7 @@ function later(fn, ms) { const t = setTimeout(() => { timers.delete(t); fn(); },
 onBeforeUnmount(() => { for (const t of timers) clearTimeout(t); timers.clear(); });
 async function create() {
   saving.value = true;
-  try { const r = await post('/api/admin/webhooks', form.value); hooks.value.push(r.webhook); showForm.value = false; form.value = { name: '', url: '', secret: '', events: [] }; ui.toast(`Вебхук создан. Секрет для проверки подписи: ${r.webhook.secret}`, { type: 'success', timeout: 12000 }); } catch (e) { ui.toast(e.message, { type: 'error' }); } finally { saving.value = false; }
+  try { const r = await post('/api/admin/webhooks', form.value); hooks.value.push(r.webhook); showForm.value = false; form.value = { name: '', url: '', secret: '', events: [], format: 'json' }; ui.toast(`Вебхук создан. Секрет для проверки подписи: ${r.webhook.secret}`, { type: 'success', timeout: 12000 }); } catch (e) { ui.toast(e.message, { type: 'error' }); } finally { saving.value = false; }
 }
 async function toggle(h) { try { const r = await patch(`/api/admin/webhooks/${h.id}`, { enabled: !h.enabled }); Object.assign(h, r.webhook); } catch (e) { ui.toast(e.message, { type: 'error' }); } }
 async function remove(h) {
@@ -62,6 +64,10 @@ function toggleEvent(id) { const e = form.value.events; form.value.events = e.in
       <div class="form-grid">
         <div class="field"><label>Название</label><input class="input" v-model="form.name" placeholder="Например, Битрикс24 / n8n / LMS" /></div>
         <div class="field"><label>Адрес (URL)</label><input class="input" v-model="form.url" placeholder="https://hooks.company.ru/corpvideo" /></div>
+        <div class="field"><label>Формат сообщения</label>
+          <select class="select" v-model="form.format"><option v-for="[id, label] in FORMATS" :key="id" :value="id">{{ label }}</option></select>
+          <div class="hint">Для Teams, Slack и Mattermost портал отправит готовую карточку с заголовком, подробностями и кнопкой «Открыть» — вставьте адрес входящего вебхука канала.</div>
+        </div>
         <div class="field" style="grid-column: 1 / -1"><label>Секрет подписи (пусто — сгенерировать)</label><input class="input" v-model="form.secret" /></div>
       </div>
       <div class="label mt-8 mb-4">События (ничего не выбрано — все)</div>
@@ -71,7 +77,7 @@ function toggleEvent(id) { const e = form.value.events; form.value.events = e.in
     <div class="table-wrap"><table class="table wh-table"><thead><tr><th>Вебхук</th><th>События</th><th>Состояние</th><th></th></tr></thead><tbody>
       <tr v-for="h in hooks" :key="h.id" :class="{ muted: !h.enabled }">
         <td><b>{{ h.name }}</b><div class="tiny mono ellipsis" style="max-width:260px" :title="h.url">{{ h.url }}</div><div class="tiny muted">секрет: <span class="mono">{{ h.secretHint }}</span> <button class="ibtn sm" style="width:20px;height:20px;vertical-align:middle" title="Скопировать секрет" @click="copySecret(h)"><Icon name="copy" :size="12" /></button></div></td>
-        <td class="small" style="max-width:220px">{{ h.events.length ? h.events.join(', ') : 'все' }}</td>
+        <td class="small" style="max-width:220px">{{ h.events.length ? h.events.join(', ') : 'все' }}<div v-if="h.format && h.format !== 'json'" class="tiny muted">формат: {{ ({ slack: 'Slack', mattermost: 'Mattermost', teams: 'Teams' })[h.format] }}</div></td>
         <td class="small"><span v-if="h.lastStatus" class="badge" :class="h.lastStatus < 300 ? 'success' : 'danger'">HTTP {{ h.lastStatus }}</span><span v-else class="muted">ещё не вызывался</span><div class="tiny muted">доставок: {{ h.deliveries }}<span v-if="h.failed" style="color:var(--danger)"> ({{ h.failed }} неуд.)</span><span v-if="h.failCount"> · ошибок подряд: {{ h.failCount }}</span></div><div v-if="h.lastAt" class="tiny muted">{{ fmtDateTime(h.lastAt) }}</div></td>
         <td class="actions nowrap"><button class="ibtn sm" title="Отправить проверочное событие" @click="test(h)"><Icon name="send" :size="16" /></button><button class="ibtn sm" title="Журнал доставок" @click="showDeliveries(h)"><Icon name="clipboardList" :size="16" /></button><button class="ibtn sm" :title="h.enabled ? 'Отключить' : 'Включить'" @click="toggle(h)"><Icon :name="h.enabled ? 'eyeOff' : 'eye'" :size="16" /></button><button class="ibtn sm" title="Удалить" @click="remove(h)"><Icon name="delete" :size="16" /></button></td>
       </tr>

@@ -63,6 +63,11 @@ export const DEFAULTS = {
   'offline.enabled': true,              // скачивание видео для просмотра без сети (PWA)
   'offline.max_mb': 2048,               // сколько мегабайт можно держать офлайн на устройстве
   'offline.days': 30,                   // через сколько дней скачанное устаревает
+  // 1.8 — согласование, календарь, мессенджеры, порядок в хранилище
+  'review.enabled': true,               // согласование видео перед публикацией
+  'chapters.auto_enabled': true,        // автоглавы по сменам кадра (слайдам)
+  'storage.quota_mb': 0,                // квота на канал сотрудника, МБ (0 — без ограничений)
+  'storage.originals_days': 0,          // через сколько дней удалять исходники (0 — хранить всегда)
   // Загрузка и обработка
   'upload.max_size_mb': 8192,
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
@@ -383,6 +388,9 @@ export async function publicSettings() {
     offlineEnabled: s['offline.enabled'],
     offlineMaxMb: s['offline.max_mb'],
     offlineDays: s['offline.days'],
+    reviewEnabled: s['review.enabled'],
+    autoChapters: s['chapters.auto_enabled'],
+    storageQuotaMb: s['storage.quota_mb'],
   };
 }
 

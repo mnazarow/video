@@ -180,6 +180,30 @@ async function copy(t) { await copyWithToast(ui, t); }
 // 1.4: дополнительные звуковые дорожки (дубляж, тифлокомментарий)
 const audioTracks = ref([]);
 const trackForm = ref({ kind: 'dub', language: 'en', label: '' });
+const slidesBusy = ref(false);
+/** Автоглавы по сменам кадра: задание считает сцены, затем подтягиваем результат (1.8). */
+async function chaptersBySlides() {
+  slidesBusy.value = true;
+  try {
+    await post(`/api/videos/${route.params.id}/chapters/auto`, {});
+    ui.toast('Ищу смены слайдов — главы появятся здесь');
+    let tries = 0;
+    const timer = setInterval(async () => {
+      tries += 1;
+      try {
+        const v = (await get(`/api/videos/${route.params.id}`)).video;
+        if ((v.chapters || []).length) {
+          chapters.value = v.chapters.map((c) => ({ ...c }));
+          video.value = v;
+          clearInterval(timer); slidesBusy.value = false;
+          ui.toast(`Расставлено глав: ${v.chapters.length}`, { type: 'success' });
+        }
+      } catch { /* ignore */ }
+      if (tries > 40) { clearInterval(timer); slidesBusy.value = false; }
+    }, 3000);
+  } catch (e) { ui.toast(e.message, { type: 'error' }); slidesBusy.value = false; }
+}
+
 async function loadTracks() {
   try { audioTracks.value = (await get(`/api/videos/${route.params.id}/audio-tracks`)).tracks; } catch { audioTracks.value = []; }
 }
@@ -314,7 +338,16 @@ async function removeTrack(t) {
         <div v-for="(c, i) in chapters" :key="i" class="row chapter-edit"><span class="mono" style="width: 70px; color: var(--brand); cursor:pointer" @click="player?.seekTo(c.start)">{{ fmtDuration(c.start) }}</span><input class="input" v-model="c.title" /><button class="ibtn sm" @click="chapters.splice(i, 1)"><Icon name="close" :size="16" /></button></div>
       </div>
       <p v-else class="muted small">Глав пока нет.</p>
-      <div class="form-actions"><button class="btn primary" @click="saveChapters">Сохранить главы</button><button class="btn ghost" @click="autoChapters">Взять из описания</button><button v-if="chapters.length" class="btn ghost danger" @click="chapters = []">Очистить</button></div>
+      <div class="form-actions">
+        <button class="btn primary" @click="saveChapters">Сохранить главы</button>
+        <button class="btn ghost" @click="autoChapters">Взять из описания</button>
+        <button v-if="auth.config?.autoChapters !== false" class="btn ghost" :disabled="slidesBusy || video.status !== 'ready' || (video.duration || 0) < 60" @click="chaptersBySlides">
+          <template v-if="slidesBusy"><span class="spin sm"></span> Ищу смены слайдов…</template>
+          <template v-else><Icon name="image" :size="16" /> По сменам слайдов</template>
+        </button>
+        <button v-if="chapters.length" class="btn ghost danger" @click="chapters = []">Очистить</button>
+      </div>
+      <p v-if="auth.config?.autoChapters !== false" class="tiny muted mt-8">«По сменам слайдов» находит моменты, где заметно меняется картинка (новый слайд, другой экран), и подписывает главы первой фразой из расшифровки — как «умные главы» Panopto.</p>
     </div>
 
     <!-- Субтитры -->

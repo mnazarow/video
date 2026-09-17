@@ -32,6 +32,15 @@ async function checkUploadAllowed(req, filename, size) {
     const n = await one(`SELECT count(*)::int AS n FROM videos WHERE owner_id = $1 AND created_at > now() - interval '1 day'`, [req.user.id]);
     if (n.n >= perDay) throw forbidden(`Достигнут дневной лимит загрузок (${perDay})`);
   }
+  // Квота на канал: сколько всего места занимают видео сотрудника (1.8)
+  const quotaMb = Number(s['storage.quota_mb']) || 0;
+  if (quotaMb && req.user.role !== 'admin') {
+    const used = await one('SELECT coalesce(sum(storage_bytes),0)::bigint AS b FROM videos WHERE owner_id = $1 AND deleted_at IS NULL', [req.user.id]);
+    const usedMb = Math.round(Number(used.b) / (1024 * 1024));
+    if (usedMb + Math.round(size / (1024 * 1024)) > quotaMb) {
+      throw forbidden(`Место на канале закончилось: занято ${usedMb} МБ из ${quotaMb} МБ. Удалите ненужные видео или попросите администратора увеличить квоту.`);
+    }
+  }
   return ext;
 }
 

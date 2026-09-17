@@ -26,6 +26,7 @@ import liveRoutes from './routes/live.js';
 import wsRoutes from './routes/ws.js';
 import adminRoutes from './routes/admin/index.js';
 import adminWebhookRoutes from './routes/admin/webhooks.js';
+import adminStorageRoutes from './routes/admin/storage.js';
 import editorRoutes from './routes/editor.js';
 import feedsRoutes from './routes/feeds.js';
 import scormRoutes from './routes/scorm.js';
@@ -39,6 +40,7 @@ import playbackRoutes from './routes/playback.js';
 import roomRoutes from './routes/rooms.js';
 import screenRoutes from './routes/screens.js';
 import meetingRoutes from './routes/meeting.js';
+import reviewRoutes from './routes/review.js';
 import quizRoutes from './routes/quiz.js';
 import noteRoutes from './routes/notes.js';
 import shareRoutes from './routes/share.js';
@@ -129,6 +131,7 @@ export async function buildApp({ logger = true } = {}) {
   await app.register(roomRoutes, { prefix: '/api' });
   await app.register(screenRoutes, { prefix: '/api' });
   await app.register(meetingRoutes, { prefix: '/api' });
+  await app.register(reviewRoutes, { prefix: '/api' });
   await app.register(quizRoutes, { prefix: '/api' });
   await app.register(noteRoutes, { prefix: '/api' });
   await app.register(shareRoutes, { prefix: '/api' });
@@ -140,6 +143,7 @@ export async function buildApp({ logger = true } = {}) {
   await app.register(feedsRoutes, { prefix: '/api/rss' });
   await app.register(adminRoutes, { prefix: '/api/admin' });
   await app.register(adminWebhookRoutes, { prefix: '/api/admin' });
+  await app.register(adminStorageRoutes, { prefix: '/api/admin' });
   await app.register(mediaRoutes);
   await app.register(wsRoutes);
 

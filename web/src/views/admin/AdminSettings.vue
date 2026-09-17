@@ -442,6 +442,12 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             <label class="switch mb-16"><input type="checkbox" v-model="s['seo.video']" /><span class="track"></span><span>Разметка и карта сайта для публичных видео (видео-SEO)</span></label>
             <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('premiere.'), ...prefix('party.'), ...prefix('screens.'), ...prefix('seo.'), 'live.captions', 'notify.video_watched'])">Сохранить</button></div>
           </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="checkAll" :size="20" style="vertical-align:-4px" /> Согласование и главы по слайдам</h3>
+            <p class="small muted">Согласование — отправка видео коллегам на проверку перед публикацией: замечания с привязкой к секунде и решение «согласовано» или «нужны правки». Главы по слайдам расставляются по сменам картинки в записи.</p>
+            <label class="switch"><input type="checkbox" v-model="s['review.enabled']" /><span class="track"></span><span>Согласование видео</span></label>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['chapters.auto_enabled']" /><span class="track"></span><span>Главы по сменам слайдов</span></label>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(['review.enabled', 'chapters.auto_enabled'])">Сохранить</button></div>
+          </div>
           <div class="panel"><h3 class="mb-8"><Icon name="clipboardList" :size="20" style="vertical-align:-4px" /> Итоги встречи, автоклипы, тренажёры и офлайн</h3>
             <p class="small muted">Итоги встречи и автоклипы разбирают расшифровку записи через подключённую языковую модель (нужен включённый ИИ-помощник). Тренажёр с ветвлением останавливает видео и предлагает выбрать действие. Офлайн — скачивание видео на устройство для просмотра без сети.</p>
             <label class="switch"><input type="checkbox" v-model="s['meeting.notes_enabled']" /><span class="track"></span><span>Итоги встречи: решения, задачи, темы</span></label>
@@ -523,7 +529,16 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
           <div v-if="sysResult" class="alert info">{{ sysResult }}</div>
         </div>
 
-        <div v-else-if="tab === 'retention'" class="panel"><h3 class="mb-8">Хранение данных</h3>
+        <div v-else-if="tab === 'retention'" class="col gap-24">
+          <div class="panel"><h3 class="mb-8"><Icon name="harddisk" :size="20" style="vertical-align:-4px" /> Место на диске</h3>
+            <p class="small muted">Квота ограничивает, сколько места занимают видео одного сотрудника: при загрузке сверх лимита портал предложит удалить лишнее. Исходники можно удалять автоматически — видео останется доступным в обработанном виде (HLS и mp4), а место освободится. Сводка — в разделе «Хранилище».</p>
+            <div class="form-grid">
+              <div class="field"><label>Квота на канал сотрудника, МБ (0 — без ограничений)</label><input class="input" type="number" min="0" max="10485760" v-model.number="s['storage.quota_mb']" /></div>
+              <div class="field"><label>Удалять исходники старше, дней (0 — хранить всегда)</label><input class="input" type="number" min="0" max="3650" v-model.number="s['storage.originals_days']" /></div>
+            </div>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('storage.'))">Сохранить</button><router-link class="btn" to="/admin/storage">Открыть «Хранилище»</router-link></div>
+          </div>
+          <div class="panel"><h3 class="mb-8">Хранение данных</h3>
           <div class="form-grid">
             <div class="field"><label>История просмотров, дней</label><input class="input" type="number" min="7" v-model.number="s['retention.history_days']" /></div>
             <div class="field"><label>Сырые данные просмотров, дней</label><input class="input" type="number" min="7" v-model.number="s['retention.raw_views_days']" /><div class="hint">Суточная статистика хранится всегда</div></div>
@@ -532,6 +547,7 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             <div class="field"><label>Корзина удалённых видео, дней</label><input class="input" type="number" min="1" v-model.number="s['retention.trash_days']" /><div class="hint">Удалённое видео можно восстановить в разделе «Все видео» в течение этого срока, затем файлы стираются</div></div>
           </div>
           <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('retention.'))">Сохранить</button></div>
+          </div>
         </div>
       </div>
     </div>
