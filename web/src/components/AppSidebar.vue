@@ -28,6 +28,7 @@ const main = [
   { to: '/trending', icon: 'trending', label: 'Тренды' },
   { to: '/subscriptions', icon: 'subscriptions', label: 'Подписки', auth: true },
   { to: '/live', icon: 'live', label: 'Трансляции' },
+  { to: '/webinars', icon: 'campaign', label: 'Вебинары', webinars: true },
   { to: '/shorts', icon: 'shorts', label: 'Короткие' },
   { to: '/courses', icon: 'school', label: 'Курсы', courses: true },
 ];
@@ -47,7 +48,7 @@ const library = [
   <aside class="app-sidebar" :class="{ mini }">
     <nav class="sb-scroll">
       <div class="sb-group">
-        <router-link v-for="m in main.filter((x) => (!x.auth || auth.isActive) && (!x.courses || auth.config?.coursesEnabled !== false))" :key="m.to" :to="m.to" class="sb-item" :class="{ 'router-link-active': $route.path === m.to }" :exact-active-class="'router-link-active'" active-class="">
+        <router-link v-for="m in main.filter((x) => (!x.auth || auth.isActive) && (!x.courses || auth.config?.coursesEnabled !== false) && (!x.webinars || auth.config?.webinarsEnabled !== false))" :key="m.to" :to="m.to" class="sb-item" :class="{ 'router-link-active': $route.path === m.to }" :exact-active-class="'router-link-active'" active-class="">
           <Icon :name="m.icon" /><span>{{ m.label }}</span>
         </router-link>
       </div>
@@ -70,6 +71,7 @@ const library = [
           <router-link to="/studio" class="sb-item"><Icon name="videocam" /><span>Студия</span></router-link>
           <router-link v-if="auth.canUpload" to="/studio/upload" class="sb-item"><Icon name="upload" /><span>Загрузить видео</span></router-link>
           <router-link v-if="auth.canStream && auth.config?.liveEnabled" to="/studio/live" class="sb-item"><Icon name="broadcast" /><span>Начать эфир</span></router-link>
+          <router-link v-if="auth.canStream && auth.config?.webinarsEnabled !== false" to="/studio/webinars" class="sb-item"><Icon name="campaign" /><span>Мои вебинары</span></router-link>
           <router-link v-if="auth.canUpload" to="/studio/record" class="sb-item"><Icon name="screenShare" /><span>Записать экран</span></router-link>
           <router-link v-if="auth.canAssign" to="/studio/assignments" class="sb-item"><Icon name="clipboardList" /><span>Обязательные просмотры</span></router-link>
         </div>

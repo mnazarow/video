@@ -63,12 +63,18 @@ export default fp(async function authPlugin(app) {
   app.decorateRequest('session', null);
   app.decorateRequest('settings', null);
   app.decorateRequest('shareTokens', null);
+  app.decorateRequest('webinarTokens', null);
 
   app.addHook('onRequest', async (req) => {
     req.settings = await loadSettings();
     // Токены защищённых ссылок (гостевой доступ к отдельным видео)
     const share = req.cookies?.cv_share;
     req.shareTokens = share ? String(share).split(',').filter((t) => /^[A-Za-z0-9_-]{8,64}$/.test(t)).slice(0, 20) : [];
+    // Токены вебинаров: персональная ссылка внешнего участника (1.10)
+    const wt = req.cookies?.cv_webinar;
+    req.webinarTokens = wt ? String(wt).split(',').filter((t) => /^[A-Za-z0-9_-]{8,64}$/.test(t)).slice(0, 10) : [];
+    const qt = req.query?.t;
+    if (qt && /^[A-Za-z0-9_-]{8,64}$/.test(String(qt))) req.webinarTokens.push(String(qt));
     let entry = null;
     const authz = req.headers.authorization;
     if (authz && authz.startsWith('Bearer ')) {

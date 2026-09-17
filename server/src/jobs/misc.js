@@ -15,6 +15,7 @@ import { sendLiveReminders } from '../routes/live-interact.js';
 import { emitEvent, eventVideo } from '../lib/events.js';
 import { scanWatchFolder, sendDigests } from './platform.js';
 import { runRetention } from './retention.js';
+import { runWebinarMaintenance } from './webinar.js';
 
 export async function runEmail(job) {
   const { to, subject, html, text } = job.payload;
@@ -122,6 +123,8 @@ async function maintenanceBody(job, ctx) {
   } catch (e) { ctx?.log?.warn({ err: e.message }, 'premieres'); }
   // 1b. Напоминания о запланированных эфирах (за 15 минут)
   try { out.liveReminders = await sendLiveReminders(); } catch (e) { ctx?.log?.warn({ err: e.message }, 'live reminders'); }
+  // 1b-2. Вебинары (1.10): напоминания за сутки/час/15 минут, сертификаты и письмо-послесловие
+  try { out.webinars = await runWebinarMaintenance(); } catch (e) { ctx?.log?.warn({ err: e.message }, 'webinars'); }
   // 1c. Срок публикации: видео с истёкшим сроком становятся приватными
   const expired = await many(`UPDATE videos SET visibility = 'private', expired_at = now() WHERE expires_at IS NOT NULL AND expires_at <= now() AND expired_at IS NULL AND deleted_at IS NULL RETURNING id, short_id, owner_id, title`);
   for (const v of expired) {

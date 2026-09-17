@@ -29,6 +29,9 @@ import adminWebhookRoutes from './routes/admin/webhooks.js';
 import adminStorageRoutes from './routes/admin/storage.js';
 import adminLifecycleRoutes from './routes/admin/lifecycle.js';
 import showcaseRoutes from './routes/showcases.js';
+import webinarPageRoutes from './routes/webinars.js';
+import webinarStudioRoutes from './routes/webinars-studio.js';
+import projectRoutes from './routes/projects.js';
 import editorRoutes from './routes/editor.js';
 import feedsRoutes from './routes/feeds.js';
 import scormRoutes from './routes/scorm.js';
@@ -148,6 +151,9 @@ export async function buildApp({ logger = true } = {}) {
   await app.register(adminStorageRoutes, { prefix: '/api/admin' });
   await app.register(adminLifecycleRoutes, { prefix: '/api/admin' });
   await app.register(showcaseRoutes, { prefix: '/api' });
+  await app.register(webinarPageRoutes, { prefix: '/api' });
+  await app.register(webinarStudioRoutes, { prefix: '/api' });
+  await app.register(projectRoutes, { prefix: '/api' });
   await app.register(mediaRoutes);
   await app.register(wsRoutes);
 

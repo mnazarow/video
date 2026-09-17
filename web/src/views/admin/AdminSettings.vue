@@ -361,13 +361,18 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             <div class="field"><label>Медленный режим чата, с (0 — выкл.)</label><input class="input" type="number" min="0" v-model.number="s['live.chat_slow_mode_sec']" /></div>
           </div>
           <div class="divider"></div>
+          <h4 class="mb-4">Вебинары (1.10)</h4>
+          <p class="small muted">Раздел «Вебинары» — каталог, страница мероприятия со своим адресом, анкета регистрации, напоминания за сутки, за час и за 15 минут, письмо с записью после эфира и отчёт по участникам.</p>
+          <div class="col gap-12"><label class="switch"><input type="checkbox" v-model="s['webinars.enabled']" /><span class="track"></span><span>Раздел «Вебинары» включён</span></label><label class="switch"><input type="checkbox" v-model="s['webinars.external_registration']" /><span class="track"></span><span>Разрешать регистрацию внешних участников (по почте, без учётной записи)</span></label><label class="switch"><input type="checkbox" v-model="s['webinars.followup']" /><span class="track"></span><span>Отправлять письмо с записью после вебинара</span></label></div>
+
+          <div class="divider"></div>
           <h4 class="mb-4">Ретрансляция и перемотка эфира (1.9)</h4>
           <p class="small muted">Ретрансляция отдаёт копию эфира на внешние площадки (VK Видео, YouTube, Rutube, свой RTMP) — адреса и ключи автор задаёт у своей трансляции. Перемотка позволяет зрителю отмотать идущий эфир назад или включить его с начала; нужна включённая запись.</p>
           <div class="col gap-12"><label class="switch"><input type="checkbox" v-model="s['live.restream_enabled']" /><span class="track"></span><span>Ретрансляция на внешние площадки</span></label><label class="switch"><input type="checkbox" v-model="s['live.dvr']" /><span class="track"></span><span>Перемотка эфира назад</span></label></div>
           <div class="form-grid mt-16">
             <div class="field"><label>Глубина перемотки, минут</label><input class="input" type="number" min="5" max="1440" v-model.number="s['live.dvr_minutes']" /></div>
           </div>
-          <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('live.'))">Сохранить</button></div>
+          <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('live.'), ...prefix('webinars.')])">Сохранить</button><router-link class="btn" to="/studio/webinars">Мои вебинары</router-link></div>
         </div>
 
         <div v-else-if="tab === 'branding'" class="panel"><h3 class="mb-8">Оформление</h3>
@@ -496,6 +501,14 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             <div class="form-grid">
               <div class="field"><label>Сила размытия по умолчанию</label><input class="input" type="number" min="4" max="60" v-model.number="s['editor.blur_strength']" /></div>
               <div class="field" style="grid-column: 1 / -1"><label>Слова-паразиты (через запятую)</label><input class="input" :value="(s['editor.filler_words'] || []).join(', ')" @change="s['editor.filler_words'] = $event.target.value.split(',').map((x) => x.trim()).filter(Boolean)" /><div class="hint">Портал ищет эти слова в расшифровке и предлагает вырезать их из записи</div></div>
+            </div>
+            <div class="divider"></div>
+            <h4 class="mb-4">Графический видеоредактор (1.10)</h4>
+            <p class="small muted">Вкладка «Монтаж» у видео: многодорожечный таймлайн с фрагментами, переходами, титрами, картинками и музыкой. Готовый ролик собирается на сервере — поверх этого видео или в отдельное.</p>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['editor.timeline']" /><span class="track"></span><span>Графический редактор включён</span></label>
+            <div class="form-grid">
+              <div class="field"><label>Качество сборки (CRF, меньше — лучше)</label><input class="input" type="number" min="14" max="32" v-model.number="s['editor.render_crf']" /></div>
+              <div class="field"><label>Максимальный размер картинки или музыки, МБ</label><input class="input" type="number" min="1" max="2048" v-model.number="s['editor.max_assets_mb']" /></div>
             </div>
             <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('editor.'))">Сохранить</button></div>
           </div>

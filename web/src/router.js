@@ -23,6 +23,9 @@ export const router = createRouter({
     { path: '/category/:slug', name: 'category', component: v('CategoryView') },
     // 1.9: витрина-подборка со своим адресом
     { path: '/hub/:slug', name: 'showcase', component: v('ShowcaseView') },
+    // 1.10: раздел «Вебинары»
+    { path: '/webinars', name: 'webinars', component: v('WebinarsView') },
+    { path: '/webinar/:slug', name: 'webinar', component: v('WebinarView') },
     { path: '/tag/:tag', name: 'tag', component: v('TagView') },
     { path: '/watch/:id', name: 'watch', component: v('WatchView') },
     { path: '/search', name: 'search', component: v('SearchView') },
@@ -72,6 +75,8 @@ export const router = createRouter({
         { path: 'courses', name: 'studio-courses', component: v('studio/StudioCourses') },
         { path: 'reviews', name: 'studio-reviews', component: v('studio/StudioReviews') },
         { path: 'calendar', name: 'studio-calendar', component: v('studio/StudioCalendar') },
+        { path: 'webinars', name: 'studio-webinars', component: v('studio/StudioWebinars') },
+        { path: 'webinars/:id', name: 'studio-webinar', component: v('studio/StudioWebinarEdit') },
         { path: 'courses/:id', name: 'studio-course', component: v('studio/StudioCourseEdit') },
         { path: 'record', name: 'studio-record', component: v('studio/StudioRecord') },
       ],
@@ -127,7 +132,7 @@ router.afterEach((to) => {
     home: site, trending: 'Тренды', latest: 'Новые видео', shorts: 'Короткие видео', subscriptions: 'Подписки', live: 'Трансляции', library: 'Библиотека', history: 'История',
     'watch-later': 'Смотреть позже', liked: 'Понравившиеся', notifications: 'Уведомления', settings: 'Настройки', login: 'Вход', register: 'Регистрация', search: 'Поиск',
     studio: 'Студия', 'studio-videos': 'Мои видео', 'studio-upload': 'Загрузка', admin: 'Администрирование', assignments: 'Назначено вам', notes: 'Мои заметки',
-    'studio-assignments': 'Обязательные просмотры', 'studio-record': 'Запись экрана', 'admin-groups': 'Группы сотрудников', share: 'Доступ по ссылке', certificates: 'Мои сертификаты',
+    'studio-assignments': 'Обязательные просмотры', webinars: 'Вебинары', 'studio-webinars': 'Мои вебинары', 'studio-record': 'Запись экрана', 'admin-groups': 'Группы сотрудников', share: 'Доступ по ссылке', certificates: 'Мои сертификаты',
   };
   const t = titles[to.name];
   if (t && to.name !== 'watch' && to.name !== 'channel') document.title = t === site ? site : `${t} — ${site}`;

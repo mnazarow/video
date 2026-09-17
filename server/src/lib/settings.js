@@ -81,6 +81,14 @@ export const DEFAULTS = {
   'lifecycle.enabled': true,            // правила хранения, архив и пересмотр актуальности
   'lifecycle.freshness_months': 0,      // по умолчанию «актуально до» через N месяцев (0 — не заполнять)
   'lifecycle.freshness_remind_days': 7, // за сколько дней напомнить автору о пересмотре
+  // 1.10 — вебинары и графический видеоредактор
+  'webinars.enabled': true,             // раздел «Вебинары»: каталог, лендинги, регистрация
+  'webinars.external_registration': true, // разрешать регистрацию внешних участников по почте
+  'webinars.reminders': [1440, 60, 15], // за сколько минут напоминать (справочно)
+  'webinars.followup': true,            // письмо-послесловие с записью и материалами
+  'editor.timeline': true,              // графический видеоредактор с таймлайном
+  'editor.render_crf': 20,              // качество сборки (меньше — лучше и тяжелее)
+  'editor.max_assets_mb': 200,          // ограничение на картинки и музыку проекта
   // Загрузка и обработка
   'upload.max_size_mb': 8192,
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
@@ -413,6 +421,9 @@ export async function publicSettings() {
     dvrMinutes: s['live.dvr_minutes'],
     showcasesEnabled: s['showcases.enabled'],
     lifecycleEnabled: s['lifecycle.enabled'],
+    webinarsEnabled: s['webinars.enabled'],
+    webinarsExternal: s['webinars.enabled'] && s['webinars.external_registration'],
+    timelineEnabled: s['editor.timeline'] && s['editor.enabled'],
   };
 }
 

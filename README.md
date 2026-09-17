@@ -39,6 +39,8 @@
 - **Размытие лиц и областей в кадре** (1.9) с автопоиском лиц и **монтаж по расшифровке**: вырезать фразы и слова-паразиты.
 - **Ретрансляция эфира** на VK Видео, YouTube и Rutube (1.9), **перемотка эфира назад** и просмотр с начала.
 - **Витрины** — страницы-подборки со своим адресом (1.9); **сроки хранения**, архив, «не удалять» и пересмотр актуальности.
+- **Вебинары** (1.10): каталог, страница мероприятия с анкетой, внешние участники по персональной ссылке, напоминания, комната ожидания, сертификаты и отчёт.
+- **Графический видеоредактор** (1.10): таймлайн с фрагментами, переходами, титрами, картинками и музыкой; сборка поверх видео или в новое.
 - В эфире: **опросы**, **вопросы ведущему** с голосованием, **напоминание** о запланированном эфире и файл календаря (.ics).
 - **Уведомления в Telegram** (привязка через бота) и вход через **корпоративный SSO** (OpenID Connect).
 - **Подсказки и конечные заставки** в плеере (как на YouTube), **очередь просмотра**, режим **«только звук»**, **повтор чата** в записях эфиров, панель **«Текст на экране»** для видео со слайдами.
@@ -309,6 +311,17 @@ corpvideo ports             # какие порты должны быть отк
 - **Сроки хранения** (Администрирование → Хранение): правила «через N дней — в архив, в корзину или уведомить автора», предпросмотр, предупреждение автору, журнал с CSV. **Архив** убирает видео из каталога, сохраняя его у автора; **отметка «не удалять»** выводит видео из-под правил; **«актуально до»** напоминает пересмотреть материал (`lifecycle.enabled`).
 - Маршруты `/api/videos/:id/editor/blur|faces|frame|transcript|fillers|text-cut`, `/api/studio/live/:id/restreams`, `/api/live/:id/dvr` (+`/play`), `/api/showcases`, `/api/admin/showcases`, `/api/admin/retention`, `/api/admin/lifecycle/videos`.
 
+## Вебинары и графический видеоредактор — версия 1.10
+
+- **Раздел «Вебинары»**: каталог в левом меню, страница мероприятия со своим адресом `/webinar/<адрес>` — обложка, программа, спикеры, материалы, кнопка действия и форма записи. Свои вебинары — **Студия → Мои вебинары** (`webinars.enabled`).
+- **Анкета регистрации** с полями организатора; **внешние участники** записываются по имени и почте и входят в комнату по персональной ссылке без учётной записи (`webinars.external_registration`).
+- **Подтверждение заявок**, **лист ожидания** с автоматическим продвижением очереди, закрытие регистрации по дате, ограничение мест.
+- **Письма**: подтверждение с ссылкой и материалами, напоминания за сутки, за час и за 15 минут, приглашения по списку адресов, письмо с записью после эфира; **сертификат участника** за присутствие дольше порога.
+- **Комната ожидания** с обратным отсчётом; **соведущие** с правами организатора; **отчёт** — воронка «записались → пришли → досмотрели», присутствие по минутам, выгрузка CSV.
+- **Графический видеоредактор** (Студия → видео → Монтаж): многодорожечный таймлайн (видео, титры, картинки, музыка), разрез по курсору, перетаскивание и обрезка за края, переходы, скорость 0,5–2×, титры с подложкой, логотипы, фоновая музыка с затуханием, формат кадра 16:9 / 9:16 / 1:1 / 4:5, вжигание субтитров, предпросмотр и точный кадр с сервера (`editor.timeline`).
+- **Сборка** поверх этого видео или в отдельное новое; проект монтажа сохраняется и к нему можно вернуться.
+- Маршруты `/api/webinars`, `/api/webinars/:slug` (+`/register`, `/cancel`, `/attendance`, `/calendar.ics`), `/api/studio/webinars` (+`/registrations`, `/materials`, `/cover`, `/invite`, `/followup`, `/report`), `/api/videos/:id/project` (+`/assets`, `/preview`, `/render`).
+
 ## Почта (SMTP)
 
 Письма подтверждения адреса, одобрения регистрации, сброса пароля, приглашения, уведомления администраторов о новых регистрациях, уведомления о новых видео и ответах. Настройки → Почта: сервер, порт, TLS, учётная запись, адрес отправителя, кнопка «Отправить тестовое письмо». Без SMTP портал работает, а подтверждение адреса можно отключить.
@@ -341,6 +354,8 @@ curl "https://video.company.ru/api/search?q=насос"
 Полезные вызовы 1.8: `GET/POST/DELETE /api/videos/:id/review`, `POST /api/videos/:id/review/decision`, `POST /api/videos/:id/review/comments`, `PATCH /api/videos/:id/review/comments/:cid`, `GET /api/studio/reviews`, `GET /api/studio/calendar?from=&to=&scope=`, `GET /api/admin/storage` (+`/export`), `POST /api/videos/:id/chapters/auto`.
 
 Полезные вызовы 1.9: `POST /api/videos/:id/editor/blur`, `POST /api/videos/:id/editor/faces`, `GET /api/videos/:id/editor/frame?t=`, `GET /api/videos/:id/editor/transcript`, `POST /api/videos/:id/editor/fillers`, `POST /api/videos/:id/editor/text-cut`, `GET/POST/PATCH/DELETE /api/studio/live/:id/restreams`, `GET /api/live/:id/dvr` (+`/play?back=|from=`), `GET /api/showcases`, `GET /api/showcases/:slug`, `GET/POST/PATCH/DELETE /api/admin/showcases`, `PUT /api/admin/showcases/:id/sections`, `GET/POST/PATCH/DELETE /api/admin/retention`, `GET /api/admin/retention/:id/preview`, `POST /api/admin/retention/:id/run`, `GET /api/admin/retention/log?format=csv`, `GET /api/admin/lifecycle/videos?kind=`, `POST /api/admin/lifecycle/videos/:id/archive|hold|freshness`.
+
+Полезные вызовы 1.10: `GET /api/webinars?scope=upcoming|past`, `GET /api/webinars/:slug`, `POST /api/webinars/:slug/register`, `POST /api/webinars/:slug/cancel`, `POST /api/webinars/:slug/attendance`, `GET /api/webinars/:slug/calendar.ics`, `GET/POST /api/studio/webinars`, `GET/PATCH /api/studio/webinars/:id`, `GET /api/studio/webinars/:id/registrations?format=csv`, `POST /api/studio/webinars/:id/registrations/:rid/decision`, `POST /api/studio/webinars/:id/{materials,cover,invite,followup,certificates}`, `GET /api/studio/webinars/:id/report`, `GET/PUT /api/videos/:id/project`, `POST/DELETE /api/videos/:id/project/assets`, `GET /api/videos/:id/project/preview?t=`, `POST /api/videos/:id/project/render`.
 
 Полезные вызовы 1.3: `GET /api/videos/:id/editor`, `POST /api/videos/:id/editor/trim|cut|silence`, `POST /api/videos/:id/clips`, `POST /api/videos/:id/subtitles/:sid/translate`, `POST /api/videos/:id/ocr`, `GET /api/videos/:id/screen-text?q=`, `GET /api/videos/:id/chat-replay`, `GET /api/videos/:id/scorm.zip?version=1.2&percent=90&share=1`, `GET /api/rss/latest?ft=…&audio=1`, `GET/POST /api/admin/webhooks`, `POST /api/admin/webhooks/:id/test`, `GET /api/admin/xapi/statements`, `POST /api/admin/system/watch-scan`.
 

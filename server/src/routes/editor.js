@@ -19,7 +19,7 @@ import { storage } from '../lib/storage.js';
 import { vttToSegments } from '../lib/util.js';
 import { config } from '../config.js';
 
-const EDITOR_JOBS = ['video_edit', 'remove_silence', 'clip_create', 'ocr', 'subtitle_translate', 'video_blur', 'face_detect'];
+const EDITOR_JOBS = ['video_edit', 'remove_silence', 'clip_create', 'ocr', 'subtitle_translate', 'video_blur', 'face_detect', 'video_render'];
 
 function jobOut(j) {
   return { id: Number(j.id), type: j.type, status: j.status, progress: j.progress || 0, stage: j.stage, error: j.error, result: j.result, payload: { start: j.payload?.start, end: j.payload?.end, apply: j.payload?.apply, vertical: j.payload?.vertical, language: j.payload?.language, op: j.payload?.op }, createdAt: j.created_at, finishedAt: j.finished_at };
@@ -32,7 +32,7 @@ function num(v, name, { min = 0, max = Infinity } = {}) {
 }
 
 // Разрушающие операции (меняют файл видео). Два таких задания одновременно перезаписали бы работу друг друга.
-const DESTRUCTIVE_SQL = `(j.type IN ('video_edit','video_blur') OR (j.type = 'remove_silence' AND j.payload->>'apply' = 'true'))`;
+const DESTRUCTIVE_SQL = `(j.type IN ('video_edit','video_blur','video_render') OR (j.type = 'remove_silence' AND j.payload->>'apply' = 'true'))`;
 
 /**
  * Поставить разрушающее задание, только если другого такого нет.

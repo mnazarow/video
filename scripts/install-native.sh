@@ -111,7 +111,7 @@ cv_rollback() {
 install_native() {
   step "Системные пакеты"
   pkg_update
-  pkg_install curl ca-certificates gnupg rsync openssl jq tar nginx postgresql postgresql-contrib ffmpeg
+  pkg_install curl ca-certificates gnupg rsync openssl jq tar nginx postgresql postgresql-contrib ffmpeg fonts-dejavu-core
   # yt-dlp (импорт видео со страниц видеосервисов) — необязательный: отсутствие пакета в репозитории не критично
   if ! (DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends yt-dlp >>"$CV_LOG" 2>&1); then
     warn "yt-dlp не установлен — импорт по ссылке будет работать только для прямых ссылок на файлы"

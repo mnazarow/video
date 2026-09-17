@@ -176,6 +176,47 @@ export const templates = {
       html: layout({ ...si, title: 'Напоминание о просмотре', body: `<p>Здравствуйте, ${escapeHtml(name)}!</p><p>Срок просмотра <b>${escapeHtml(title)}</b> — ${new Date(due).toLocaleDateString('ru-RU')}. Просмотрено: ${percent}%.</p>${button(url, 'Досмотреть')}` }),
     });
   },
+  // --- Вебинары (1.10) -------------------------------------------------------------------
+  async webinarConfirm({ to, name, title, when, url, note, materials = [], pending = false, waitlist = false }) {
+    const si = await siteInfo();
+    const head = pending ? 'Заявка принята' : waitlist ? 'Вы в листе ожидания' : 'Вы записаны на вебинар';
+    const lead = pending
+      ? 'Организатор проверит заявку и пришлёт подтверждение со ссылкой для входа.'
+      : waitlist
+        ? 'Мест пока нет — как только место освободится, мы пришлём ссылку для входа.'
+        : 'Ссылка ниже — персональная, по ней вы попадёте в комнату вебинара.';
+    const mat = materials.length ? `<p><b>Материалы:</b> ${materials.map((m) => `<a href="${m.url}">${escapeHtml(m.name)}</a>`).join(', ')}</p>` : '';
+    return queueMail({
+      to,
+      subject: `${si.siteName}: ${pending ? 'заявка на вебинар' : 'вы записаны на вебинар'} «${title}»`,
+      html: layout({ ...si, title: head, body: `<p>Здравствуйте, ${escapeHtml(name)}!</p><p><b>${escapeHtml(title)}</b>${when ? `<br>Начало: ${escapeHtml(when)}` : ''}</p><p>${lead}</p>${note ? `<p>${escapeHtml(note)}</p>` : ''}${pending || waitlist ? '' : button(url, 'Перейти к вебинару')}${mat}` }),
+    });
+  },
+  async webinarReminder({ to, name, title, when, url, leadLabel }) {
+    const si = await siteInfo();
+    return queueMail({
+      to,
+      subject: `${si.siteName}: вебинар «${title}» ${leadLabel}`,
+      html: layout({ ...si, title: 'Напоминание о вебинаре', body: `<p>Здравствуйте, ${escapeHtml(name)}!</p><p>Вебинар <b>${escapeHtml(title)}</b> начнётся ${escapeHtml(leadLabel)}${when ? ` (${escapeHtml(when)})` : ''}.</p>${button(url, 'Войти в комнату вебинара')}` }),
+    });
+  },
+  async webinarFollowup({ to, name, title, url, recordingUrl, materials = [], certUrl = null, attended = true }) {
+    const si = await siteInfo();
+    const mat = materials.length ? `<p><b>Материалы вебинара:</b> ${materials.map((m) => `<a href="${m.url}">${escapeHtml(m.name)}</a>`).join(', ')}</p>` : '';
+    return queueMail({
+      to,
+      subject: `${si.siteName}: запись вебинара «${title}»`,
+      html: layout({ ...si, title: attended ? 'Спасибо за участие' : 'Запись вебинара', body: `<p>Здравствуйте, ${escapeHtml(name)}!</p><p>${attended ? 'Спасибо, что были с нами на вебинаре' : 'Вы записывались на вебинар'} <b>${escapeHtml(title)}</b>.</p>${button(recordingUrl || url, recordingUrl ? 'Смотреть запись' : 'Открыть страницу вебинара')}${mat}${certUrl ? `<p>Ваш сертификат участника: <a href="${certUrl}">открыть</a></p>` : ''}` }),
+    });
+  },
+  async webinarInvite({ to, title, when, url, inviterName, note }) {
+    const si = await siteInfo();
+    return queueMail({
+      to,
+      subject: `${si.siteName}: приглашение на вебинар «${title}»`,
+      html: layout({ ...si, title: 'Приглашение на вебинар', body: `<p>${escapeHtml(inviterName || si.siteName)} приглашает вас на вебинар <b>${escapeHtml(title)}</b>${when ? `<br>Начало: ${escapeHtml(when)}` : ''}.</p>${note ? `<p>${escapeHtml(note)}</p>` : ''}${button(url, 'Записаться')}` }),
+    });
+  },
   async test({ to }) {
     const si = await siteInfo();
     return sendMailNow({ to, subject: `${si.siteName}: проверка SMTP`, html: layout({ ...si, title: 'Проверка настроек почты', body: '<p>Если вы читаете это письмо — SMTP настроен верно.</p>' }) });

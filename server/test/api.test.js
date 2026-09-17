@@ -2193,6 +2193,224 @@ test('ретрансляция эфира и перемотка назад', asy
   assert.equal((await admin.del(`/api/studio/live/${stream.id}`)).status, 200);
 });
 
+test('вебинары: страница, анкета, внешние участники, лист ожидания и отчёт', async () => {
+  const slug = `web-${stamp}`;
+  const cr = await admin.post('/api/studio/webinars', {
+    title: `Вебинар ${stamp}`, slug, description: 'Проверочный вебинар',
+    scheduledAt: new Date(Date.now() + 3 * 86400000).toISOString(), regExternal: true, registrationLimit: 2,
+  });
+  assert.equal(cr.status, 200, cr.text);
+  const w = cr.json.webinar;
+
+  const upd = await admin.patch(`/api/studio/webinars/${w.id}`, {
+    agenda: [{ time: '10:00', title: 'Вступление' }, { time: '10:20', title: 'Разбор' }],
+    speakers: [{ name: 'Мария Соколова', role: 'Руководитель' }],
+    regFields: [{ id: 'dept', label: 'Подразделение', type: 'text', required: true }, { id: 'exp', label: 'Опыт', type: 'select', options: ['Есть', 'Нет'] }],
+    certEnabled: true, certMinPercent: 50,
+    cta: { label: 'Памятка', url: 'https://example.com/p.pdf', text: 'Скачать памятку' },
+  });
+  assert.equal(upd.status, 200, upd.text);
+
+  const page = await admin.get(`/api/webinars/${slug}`);
+  assert.equal(page.status, 200, page.text);
+  assert.equal(page.json.webinar.agenda.length, 2, 'программа сохранена');
+  assert.equal(page.json.webinar.speakers.length, 1, 'спикеры сохранены');
+  assert.equal(page.json.webinar.registration.fields.length, 2, 'поля анкеты на странице');
+  assert.ok(page.json.webinar.cta?.label, 'кнопка действия');
+
+  const list = await admin.get('/api/webinars');
+  assert.ok(list.json.webinars.some((x) => x.id === w.id), 'вебинар в каталоге');
+
+  // Сотрудник: обязательное поле проверяется
+  const bad = await user.post(`/api/webinars/${slug}/register`, { answers: {} });
+  assert.equal(bad.status, 400, 'без обязательного поля регистрация не проходит');
+  const reg = await user.post(`/api/webinars/${slug}/register`, { answers: { dept: 'Эксплуатация', exp: 'Есть' } });
+  assert.equal(reg.status, 200, reg.text);
+  assert.equal(reg.json.status, 'approved');
+
+  // Внешний участник без учётной записи получает персональную ссылку
+  const ext = new Client();
+  const e1 = await ext.post(`/api/webinars/${slug}/register`, { name: 'Пётр Внешний', email: `ext.${stamp}@partner.ru`, answers: { dept: 'Подрядчик' } });
+  assert.equal(e1.status, 200, e1.text);
+  assert.match(e1.json.joinUrl, /\?t=/, 'выдана персональная ссылка');
+  const room = await ext.get(`/api/live/${w.shortId}`);
+  assert.equal(room.status, 200, 'внешний участник попадает в комнату эфира по ссылке');
+  const stranger = await guest.get(`/api/live/${w.shortId}`);
+  assert.ok([401, 403].includes(stranger.status), 'посторонний в комнату не проходит');
+
+  // Мест два — третий уходит в лист ожидания
+  const ext2 = new Client();
+  const e2 = await ext2.post(`/api/webinars/${slug}/register`, { name: 'Третий', email: `ext3.${stamp}@partner.ru`, answers: { dept: 'x' } });
+  assert.equal(e2.json.status, 'waitlist', 'третий участник — в листе ожидания');
+
+  // Отмена освобождает место и поднимает первого из очереди
+  const cancel = await ext.post(`/api/webinars/${slug}/cancel`, {});
+  assert.equal(cancel.status, 200, cancel.text);
+  const afterCancel = await admin.get(`/api/studio/webinars/${w.id}/registrations?status=approved`);
+  assert.ok(afterCancel.json.registrations.some((r) => r.email === `ext3.${stamp}@partner.ru`), 'место освободилось и лист ожидания подвинулся');
+
+  // Модерация заявок
+  await admin.patch(`/api/studio/webinars/${w.id}`, { regModeration: true, registrationLimit: 50 });
+  const ext4 = new Client();
+  const e4 = await ext4.post(`/api/webinars/${slug}/register`, { name: 'Четвёртый', email: `ext4.${stamp}@partner.ru`, answers: { dept: 'x' } });
+  assert.equal(e4.json.status, 'pending', 'при модерации заявка ждёт решения');
+  const pending = await admin.get(`/api/studio/webinars/${w.id}/registrations?status=pending`);
+  const pid = pending.json.registrations[0].id;
+  const decided = await admin.post(`/api/studio/webinars/${w.id}/registrations/${pid}/decision`, { decision: 'approve' });
+  assert.equal(decided.json.status, 'approved');
+  const foreign = await user.get(`/api/studio/webinars/${w.id}/registrations`);
+  assert.equal(foreign.status, 403, 'чужой кабинет вебинара закрыт');
+
+  // Отчёт и выгрузка
+  const rep = await admin.get(`/api/studio/webinars/${w.id}/report`);
+  assert.equal(rep.status, 200, rep.text);
+  assert.ok(rep.json.funnel.registered >= 3, 'воронка считает записавшихся');
+  assert.ok(Array.isArray(rep.json.presence), 'кривая присутствия есть');
+  const csv = await admin.get(`/api/studio/webinars/${w.id}/registrations?format=csv`);
+  assert.equal(csv.status, 200);
+  assert.ok(csv.text.includes('Подразделение'), 'в CSV попали ответы анкеты');
+
+  // Напоминания и порог сертификата — модульно
+  const { certThreshold } = await import('../src/jobs/webinar.js');
+  assert.equal(certThreshold({ cert_min_percent: 50 }, 3600), 1800);
+});
+
+test('графический редактор: проект, предпросмотр и сборка ролика', async () => {
+  const { normalizeProject, projectDuration, outputToSource, outputSize, remapCues, buildRender } = await import('../src/lib/timeline.js');
+  // Разбор проекта
+  const p = normalizeProject({
+    clips: [{ id: 'c1', start: 0, end: 5, transition: { type: 'dissolve', duration: 0.5 } }, { id: 'c2', start: 10, end: 14, speed: 2 }],
+    texts: [{ id: 't1', text: 'Титр', start: 0, end: 3 }, { id: 't2', text: '   ', start: 0, end: 2 }],
+    images: [{ id: 'i1', assetId: 'нет-такого', start: 0, end: 2 }],
+    aspect: '9:16',
+  }, { duration: 20, assets: [] });
+  assert.equal(p.clips.length, 2);
+  assert.equal(p.texts.length, 1, 'пустой титр отброшен');
+  assert.equal(p.images.length, 0, 'картинка без файла отброшена');
+  assert.ok(Math.abs(projectDuration(p) - 6.5) < 0.01, 'длительность с учётом ускорения и перехода: ' + projectDuration(p));
+  const map = outputToSource(p, 1);
+  assert.equal(map.index, 0);
+  assert.ok(Math.abs(map.source - 1) < 0.01);
+  const size = outputSize({ width: 1920, height: 1080 }, '9:16');
+  assert.equal(size.w, 608, 'вертикальный кадр обрезается по центру');
+  const cues = remapCues([{ start: 1, end: 2, text: 'а' }, { start: 6, end: 7, text: 'б' }, { start: 11, end: 12, text: 'в' }], p.clips);
+  assert.equal(cues.length, 2, 'реплики из вырезанного куска отброшены');
+  assert.ok(Math.abs(cues[1].start - 5) < 0.1, 'реплика сдвинута под монтаж с учётом перехода и скорости: ' + cues[1].start);
+  const g = buildRender(p, { src: 'in.mp4', out: 'out.mp4', meta: { width: 1920, height: 1080, hasAudio: true, fps: 25 }, assets: [], tmpDir: os.tmpdir() });
+  assert.ok(g.filter.includes('xfade=transition=fade'), 'переход собран');
+  assert.ok(g.filter.includes('atempo=2'), 'ускорение звука');
+  assert.ok(g.filter.includes('drawtext='), 'титр в графе');
+  assert.equal(g.files.length, 1, 'текст титра выносится в файл');
+
+  // Через API: загружаем короткое видео, собираем ролик с титром, картинкой и музыкой
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-mont-'));
+  const srcFile = path.join(dir, 'src.mp4');
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25:duration=20', '-f', 'lavfi', '-i', 'sine=frequency=300:duration=20', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', srcFile]);
+  const logo = path.join(dir, 'logo.png');
+  execFileSync('python3', ['-c', `
+import cv2, numpy as np
+img = np.zeros((120, 300, 4), np.uint8); img[:, :, :3] = (40, 120, 240); img[:, :, 3] = 255
+cv2.imwrite(${JSON.stringify(logo)}, img)
+`]);
+  const music = path.join(dir, 'music.mp3');
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=700:duration=10', '-c:a', 'libmp3lame', music]);
+
+  const data = fs.readFileSync(srcFile);
+  const init = await admin.post('/api/uploads', { filename: 'Материал для монтажа.mp4', size: data.length, mime: 'video/mp4', title: `Материал для монтажа ${stamp}`, visibility: 'private' });
+  assert.equal(init.status, 200, init.text);
+  const vid = init.json.videoId;
+  for (let off = 0; off < data.length; off += 400000) {
+    const part = data.subarray(off, Math.min(data.length, off + 400000));
+    await admin.req('PATCH', `/api/uploads/${init.json.uploadId}`, part, { headers: { 'content-type': 'application/offset+octet-stream', 'upload-offset': String(off) } });
+  }
+  await admin.post(`/api/uploads/${init.json.uploadId}/complete`, {});
+  let v;
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    v = (await admin.get(`/api/videos/${vid}`)).json.video;
+    if (['ready', 'failed'].includes(v.status)) break;
+  }
+  assert.equal(v.status, 'ready', 'исходник для монтажа обработан');
+
+  try {
+  const empty = await admin.get(`/api/videos/${vid}/project`);
+  assert.equal(empty.status, 200, empty.text);
+  assert.equal(empty.json.project.clips.length, 1, 'по умолчанию весь ролик одним куском');
+
+  const assets = {};
+  for (const [file, type, kind] of [[logo, 'image/png', 'image'], [music, 'audio/mpeg', 'audio']]) {
+    const fd = new FormData();
+    fd.append('file', new Blob([fs.readFileSync(file)], { type }), path.basename(file));
+    const up = await admin.post(`/api/videos/${vid}/project/assets`, fd);
+    assert.equal(up.status, 200, up.text);
+    assets[kind] = up.json.asset.id;
+  }
+  const project = {
+    aspect: 'source', mainVolume: 0.8, fadeIn: 0.4, fadeOut: 0.6,
+    clips: [
+      { id: 'c1', start: 0, end: 6, transition: { type: 'dissolve', duration: 0.5 } },
+      { id: 'c2', start: 12, end: 18, speed: 1.5 },
+    ],
+    texts: [{ id: 't1', text: 'Проверка монтажа', start: 0.5, end: 4, size: 40 }],
+    images: [{ id: 'i1', assetId: assets.image, start: 0, end: 6, x: 0.9, y: 0.1, width: 0.2 }],
+    audio: [{ id: 'a1', assetId: assets.audio, start: 0, end: 8, volume: 0.2, fadeIn: 1, fadeOut: 1 }],
+  };
+  const saved = await admin.put(`/api/videos/${vid}/project`, { project });
+  assert.equal(saved.status, 200, saved.text);
+  assert.ok(Math.abs(saved.json.outputDuration - 9.5) < 0.05, 'длительность проекта: ' + saved.json.outputDuration);
+
+  const frame = await admin.get(`/api/videos/${vid}/project/preview?t=2`);
+  assert.equal(frame.status, 200, 'кадр предпросмотра собран');
+  assert.equal(frame.headers.get('content-type'), 'image/jpeg');
+
+  const run = await admin.post(`/api/videos/${vid}/project/render`, { output: 'new', title: `Монтаж ${stamp}`, visibility: 'private' });
+  assert.equal(run.status, 200, run.text);
+  let job = null;
+  for (let i = 0; i < 240; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    job = (await admin.get(`/api/videos/${vid}/editor/jobs/${run.json.jobId}`)).json.job;
+    if (['done', 'failed', 'cancelled'].includes(job.status)) break;
+  }
+  assert.equal(job?.status, 'done', 'сборка выполнена: ' + job?.error);
+  const madeId = job.result.videoId;
+  let made;
+  for (let i = 0; i < 240; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    made = (await admin.get(`/api/videos/${madeId}`)).json.video;
+    if (['ready', 'failed'].includes(made.status)) break;
+  }
+  assert.equal(made.status, 'ready', 'смонтированное видео обработано');
+  assert.ok(Math.abs(made.duration - 9.5) < 0.6, 'длительность готового ролика: ' + made.duration);
+
+  // Проверяем картинкой: в кадре появился титр (яркие пиксели в центре кадра)
+  const outFile = path.join(dir, 'made.mp4');
+  fs.writeFileSync(outFile, Buffer.from(await (await fetch(BASE + made.mp4Url, { headers: { cookie: admin.cookie } })).arrayBuffer()));
+  const check = execFileSync('python3', ['-c', `
+import cv2, json
+cap = cv2.VideoCapture(${JSON.stringify(outFile)})
+def white(t):
+    cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+    ok, f = cap.read()
+    if not ok: return -1
+    h, w = f.shape[:2]
+    roi = f[int(h * 0.6):h, :]
+    return int(((roi > 240).all(axis=2)).sum())
+print(json.dumps({"withText": white(2), "withoutText": white(8)}))
+`]).toString();
+  const px = JSON.parse(check);
+  assert.ok(px.withText > px.withoutText * 2 + 50, 'титр виден в кадре: ' + JSON.stringify(px));
+
+  // Границы: чужой проект монтажа
+  const foreign = await user.get(`/api/videos/${vid}/project`);
+  assert.equal(foreign.status, 403, 'чужой проект монтажа закрыт');
+  await admin.del(`/api/videos/${madeId}`);
+  } finally {
+    // Тестовые видео не должны оставаться в библиотеке даже при падении проверки
+    await admin.del(`/api/videos/${vid}`).catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);

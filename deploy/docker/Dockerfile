@@ -21,6 +21,7 @@ RUN npm ci --omit=dev --no-audit --no-fund
 FROM node:22-bookworm-slim AS app
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl tini yt-dlp tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng \
+     fonts-dejavu-core python3-opencv python3 \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=server-deps /build/server/node_modules ./server/node_modules

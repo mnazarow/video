@@ -110,6 +110,19 @@ export function canViewPlaylist(pl, user) {
   return false;
 }
 
+/** Действующая регистрация внешнего участника вебинара по токену (cookie cv_webinar или ?t=). */
+export async function webinarGuest(streamId, tokens) {
+  if (!tokens || !tokens.length) return null;
+  return one(`SELECT * FROM live_registrations WHERE stream_id = $1 AND token = ANY($2::text[]) AND status = 'approved'`, [streamId, tokens]);
+}
+
+/** Доступ к эфиру с учётом внешних участников вебинара по персональной ссылке. */
+export async function canViewLiveOrGuest(stream, user, tokens) {
+  if (canViewLive(stream, user)) return true;
+  if (!stream?.webinar || !stream.reg_external) return false;
+  return !!(await webinarGuest(stream.id, tokens));
+}
+
 export function canViewLive(stream, user) {
   if (!stream) return false;
   if (user && (user.id === stream.owner_id || isStaff(user))) return true;

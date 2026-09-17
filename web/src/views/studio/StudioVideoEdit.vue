@@ -20,6 +20,7 @@ import AttachmentsEditor from '../../components/studio/AttachmentsEditor.vue';
 import VideoEditor from '../../components/studio/VideoEditor.vue';
 import BlurEditor from '../../components/studio/BlurEditor.vue';
 import TextEditor from '../../components/studio/TextEditor.vue';
+import TimelineEditor from '../../components/studio/TimelineEditor.vue';
 import CardsEditor from '../../components/studio/CardsEditor.vue';
 import AssignDialog from '../../components/AssignDialog.vue';
 import { ChunkedUpload } from '../../utils/upload.js';
@@ -37,7 +38,7 @@ const saving = ref(false);
 const dirty = ref(false);
 const player = ref(null);
 const tab = computed(() => route.params.tab || 'details');
-const TABS = [['details', 'Сведения', 'edit'], ['thumbnail', 'Миниатюра', 'image'], ['chapters', 'Главы', 'listStatus'], ['subtitles', 'Субтитры', 'subtitles'], ['editor', 'Редактор', 'scissors'], ['blur', 'Размытие', 'eyeOff'], ['text', 'Монтаж по тексту', 'transcript'], ['cards', 'Подсказки', 'cards'], ['attachments', 'Материалы', 'inventory'], ['quiz', 'Тест', 'quizOutline'], ['scenario', 'Тренажёр', 'dots'], ['access', 'Доступ', 'lock'], ['analytics', 'Аналитика', 'analytics']];
+const TABS = [['details', 'Сведения', 'edit'], ['thumbnail', 'Миниатюра', 'image'], ['chapters', 'Главы', 'listStatus'], ['subtitles', 'Субтитры', 'subtitles'], ['editor', 'Редактор', 'scissors'], ['montage', 'Монтаж', 'movieEdit'], ['blur', 'Размытие', 'eyeOff'], ['text', 'Монтаж по тексту', 'transcript'], ['cards', 'Подсказки', 'cards'], ['attachments', 'Материалы', 'inventory'], ['quiz', 'Тест', 'quizOutline'], ['scenario', 'Тренажёр', 'dots'], ['access', 'Доступ', 'lock'], ['analytics', 'Аналитика', 'analytics']];
 const SOURCES = { home: 'Главная', search: 'Поиск', subscriptions: 'Подписки', channel: 'Канал', playlist: 'Плейлист', related: 'Похожие', direct: 'Прямая ссылка', embed: 'Встраивание', notification: 'Уведомление', trending: 'Тренды', library: 'Библиотека', external: 'Внешние сайты', share: 'Поделиться' };
 const DEVICES = { desktop: 'Компьютер', mobile: 'Телефон', tablet: 'Планшет', tv: 'ТВ' };
 let off = [];
@@ -327,6 +328,11 @@ async function removeTrack(t) {
     <!-- Редактор -->
     <div v-else-if="tab === 'editor'">
       <VideoEditor :video="video" :player="player" @changed="load" />
+    </div>
+
+    <!-- Графический видеоредактор (1.10) -->
+    <div v-else-if="tab === 'montage'">
+      <TimelineEditor :video="video" @changed="load" />
     </div>
 
     <!-- Размытие лиц и областей (1.9) -->

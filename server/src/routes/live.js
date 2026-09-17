@@ -3,7 +3,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { one, many, query, publish, bus } from '../db.js';
 import { config } from '../config.js';
-import { canStream, canViewLive, isStaff, isActive } from '../lib/access.js';
+import { canStream, canViewLive, canViewLiveOrGuest, isStaff, isActive } from '../lib/access.js';
 import { liveOut } from '../lib/serialize.js';
 import { badRequest, forbidden, notFound, unauthorized, paging, escapeHtml } from '../lib/util.js';
 import { randomToken, shortId } from '../lib/crypto.js';
@@ -55,7 +55,7 @@ export default async function liveRoutes(app) {
   app.get('/live/:id', async (req) => {
     const s = await loadStream(req.params.id);
     if (!s) throw notFound('Трансляция не найдена');
-    if (!canViewLive(s, req.user)) throw req.user ? forbidden('Нет доступа к трансляции') : unauthorized('Войдите, чтобы смотреть трансляцию');
+    if (!(await canViewLiveOrGuest(s, req.user, req.webinarTokens))) throw req.user ? forbidden('Нет доступа к трансляции') : unauthorized('Войдите, чтобы смотреть трансляцию');
     const isOwner = req.user && (req.user.id === s.owner_id || req.user.role === 'admin');
     const out = liveOut({ ...s, viewer_count: liveViewerCount(s.id) }, { viewer: req.user, withKey: !!isOwner });
     if (isOwner) {
@@ -79,7 +79,7 @@ export default async function liveRoutes(app) {
   app.get('/live/:id/hls/*', async (req, reply) => {
     const s = await loadStream(req.params.id);
     if (!s) throw notFound();
-    if (!canViewLive(s, req.user)) throw req.user ? forbidden() : unauthorized();
+    if (!(await canViewLiveOrGuest(s, req.user, req.webinarTokens))) throw req.user ? forbidden() : unauthorized();
     // Только имена файлов плейлиста/сегментов: закодированные «..» (%252e) раньше проходили фильтр
     const file = String(req.params['*'] || 'index.m3u8');
     if (file.includes('..') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,120}){0,2}$/.test(file)) throw notFound();
@@ -104,7 +104,7 @@ export default async function liveRoutes(app) {
   app.get('/live/:id/chat', async (req) => {
     const s = await loadStream(req.params.id);
     if (!s) throw notFound();
-    if (!canViewLive(s, req.user)) throw req.user ? forbidden() : unauthorized();
+    if (!(await canViewLiveOrGuest(s, req.user, req.webinarTokens))) throw req.user ? forbidden() : unauthorized();
     const { limit } = paging(req.query, 50, 200);
     const before = Number(req.query.before) || null;
     const rows = await many(
@@ -251,7 +251,7 @@ export default async function liveRoutes(app) {
   app.get('/live/:id/dvr', async (req) => {
     const s = await loadStream(req.params.id);
     if (!s) throw notFound('Трансляция не найдена');
-    if (!canViewLive(s, req.user)) throw req.user ? forbidden() : unauthorized();
+    if (!(await canViewLiveOrGuest(s, req.user, req.webinarTokens))) throw req.user ? forbidden() : unauthorized();
     const settings = req.settings || await loadSettings();
     const windowSec = Math.max(60, Number(settings['live.dvr_minutes']) || 120) * 60;
     if (!settings['live.dvr'] || s.dvr === false || !s.record) return { enabled: false, available: 0, windowSec };
@@ -276,7 +276,7 @@ export default async function liveRoutes(app) {
   app.get('/live/:id/dvr/play', async (req, reply) => {
     const s = await loadStream(req.params.id);
     if (!s) throw notFound();
-    if (!canViewLive(s, req.user)) throw req.user ? forbidden() : unauthorized();
+    if (!(await canViewLiveOrGuest(s, req.user, req.webinarTokens))) throw req.user ? forbidden() : unauthorized();
     const settings = req.settings || await loadSettings();
     if (!settings['live.dvr'] || s.dvr === false) throw forbidden('Перемотка эфира отключена');
     const windowSec = Math.max(60, Number(settings['live.dvr_minutes']) || 120) * 60;
