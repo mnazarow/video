@@ -2411,6 +2411,45 @@ print(json.dumps({"withText": white(2), "withoutText": white(8)}))
   }
 });
 
+test('загрузка: предел 2 ТБ, размер части и устойчивость к мусору в запросе', async () => {
+  const { chunkSizeFor } = await import('../src/routes/uploads.js');
+  const { intOrNull, sizeOrNull, isUuid } = await import('../src/lib/util.js');
+  assert.equal(chunkSizeFor(200 * 1024 * 1024) / (1024 * 1024), 8, 'обычный файл — части по 8 МБ');
+  assert.equal(chunkSizeFor(50 * 1024 ** 3) / (1024 * 1024), 16);
+  assert.equal(chunkSizeFor(200 * 1024 ** 3) / (1024 * 1024), 32);
+  assert.equal(chunkSizeFor(2 * 1024 ** 4) / (1024 * 1024), 64, 'терабайтный файл — части по 64 МБ');
+  assert.equal(intOrNull('категория'), null, 'нечисловая категория не уходит в SQL');
+  assert.equal(intOrNull(''), null);
+  assert.equal(intOrNull('7'), 7);
+  assert.equal(sizeOrNull(undefined), null);
+  assert.equal(sizeOrNull('1048576'), 1048576);
+  assert.ok(!isUuid('undefined') && isUuid('0f8fad5b-d9cb-469f-a165-70867728950e'));
+
+  // Предел из настроек действительно 2 ТБ
+  const cfg = await admin.get('/api/admin/settings');
+  assert.ok(Number(cfg.json.settings['upload.max_size_mb']) >= 2097152, 'предел загрузки не меньше 2 ТБ');
+
+  // Файл на 1,5 ТБ принимается к загрузке
+  const big = await admin.post('/api/uploads', { filename: 'huge.mp4', size: Math.round(1.5 * 1024 ** 4), mime: 'video/mp4', visibility: 'private' });
+  assert.equal(big.status, 200, big.text);
+  assert.equal(big.json.chunkSize, 64 * 1024 * 1024, 'части подстроились под размер');
+  await admin.del(`/api/videos/${big.json.videoId}`);
+
+  // Мусор в категории раньше давал 400 «Некорректный идентификатор или значение в запросе»
+  const trash = await admin.post('/api/uploads', { filename: 'x.mp4', size: 1048576, mime: 'video/mp4', visibility: 'private', categoryId: 'Обучение' });
+  assert.equal(trash.status, 200, trash.text);
+  const created = (await admin.get(`/api/videos/${trash.json.videoId}`)).json.video;
+  assert.equal(created.categoryId, null, 'нечисловая категория просто игнорируется');
+  await admin.del(`/api/videos/${trash.json.videoId}`);
+
+  // Пустой размер — понятное сообщение, мусорный идентификатор загрузки — 404, а не ошибка базы
+  const noSize = await admin.post('/api/uploads', { filename: 'x.mp4', mime: 'video/mp4' });
+  assert.equal(noSize.status, 400);
+  assert.match(noSize.json.error, /размер файла/i);
+  const bogus = await admin.get('/api/uploads/undefined');
+  assert.equal(bogus.status, 404, 'мусорный идентификатор загрузки не доходит до базы');
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);

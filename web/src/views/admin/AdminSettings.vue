@@ -1,4 +1,5 @@
 <script setup>
+import { fmtBytes } from '../../utils/format.js';
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { get, put, post, del, uploadFile } from '../../api.js';
@@ -140,7 +141,7 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
           <div class="panel"><h3 class="mb-16">Загрузка</h3>
             <div class="form-grid">
               <div class="field"><label>Кто может загружать видео</label><select class="select" v-model="s['upload.who_can_upload']"><option value="all">Все активные пользователи</option><option value="allowed">Только с разрешением в профиле</option><option value="admins">Только администраторы</option></select></div>
-              <div class="field"><label>Максимальный размер файла, МБ</label><input class="input" type="number" min="10" v-model.number="s['upload.max_size_mb']" /></div>
+              <div class="field"><label>Максимальный размер файла, МБ</label><input class="input" type="number" min="10" max="4194304" v-model.number="s['upload.max_size_mb']" /><div class="hint">{{ fmtBytes((Number(s['upload.max_size_mb']) || 0) * 1024 * 1024) }} · файл загружается частями, поэтому большой размер не мешает докачке при обрыве связи</div></div>
               <div class="field"><label>Видимость по умолчанию</label><select class="select" v-model="s['upload.default_visibility']"><option value="internal">Для сотрудников</option><option value="public">Публичное</option><option value="unlisted">По ссылке</option><option value="private">Приватное</option></select></div>
               <div class="field"><label>Лимит загрузок в сутки на пользователя (0 — без лимита)</label><input class="input" type="number" min="0" v-model.number="s['upload.max_per_day']" /></div>
               <div class="field"><label>Макс. размер вложения к видео, МБ</label><input class="input" type="number" min="1" v-model.number="s['upload.attachment_max_mb']" /></div>

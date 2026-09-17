@@ -192,6 +192,28 @@ export function bytesHuman(n) {
   return `${n.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
 }
 
+/** Похоже ли значение на UUID: защищает запросы к uuid-колонкам от «undefined» и прочего мусора. */
+export function isUuid(v) {
+  return typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+
+/** Целое из запроса: пустое, мусорное или отрицательное значение → null (иначе NaN уедет в SQL). */
+export function intOrNull(v, { min = 1, max = 2147483647 } = {}) {
+  if (v === undefined || v === null || v === '' || v === false) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const i = Math.trunc(n);
+  if (i < min || i > max) return null;
+  return i;
+}
+
+/** Размер файла из запроса: положительное целое в пределах bigint, иначе null. */
+export function sizeOrNull(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0 || n > Number.MAX_SAFE_INTEGER) return null;
+  return Math.trunc(n);
+}
+
 export function clientIp(req) {
   return req.ip || req.socket?.remoteAddress || '';
 }

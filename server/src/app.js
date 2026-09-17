@@ -64,7 +64,8 @@ export async function buildApp({ logger = true } = {}) {
   });
 
   await app.register(cookie, { secret: config.secretKey });
-  await app.register(multipart, { limits: { fileSize: 16 * 1024 * 1024 * 1024, files: 1, fields: 20 } });
+  // Предел простой (не чанковой) загрузки: фактический размер проверяет checkUploadAllowed по настройке upload.max_size_mb
+  await app.register(multipart, { limits: { fileSize: 2 * 1024 * 1024 * 1024 * 1024, files: 1, fields: 20 } });
   await app.register(rateLimit, {
     global: true, max: 1500, timeWindow: '1 minute',
     // Ограничение действует только на API; статика, медиа, HLS-прокси и проверки доступа не учитываются
@@ -101,8 +102,14 @@ export async function buildApp({ logger = true } = {}) {
     if (err.validation) { reply.code(400).send({ error: 'Некорректные данные запроса', details: err.validation }); return; }
     if (err.statusCode && err.statusCode < 500) { reply.code(err.statusCode).send({ error: err.message }); return; }
     if (err.code === 'FST_REQ_FILE_TOO_LARGE') { reply.code(413).send({ error: 'Файл слишком большой' }); return; }
-    // Ошибки PostgreSQL при некорректном вводе (например, не-UUID в идентификаторе) — это ошибка запроса, а не сервера
-    if (err.code === '22P02' || err.code === '22007' || err.code === '22008' || err.code === '22003') { reply.code(400).send({ error: 'Некорректный идентификатор или значение в запросе' }); return; }
+    // Ошибки PostgreSQL при некорректном вводе (например, не-UUID в идентификаторе) — это ошибка запроса, а не сервера.
+    // Подробности пишем в журнал: без них такую 400-ку невозможно разобрать по жалобе пользователя.
+    if (err.code === '22P02' || err.code === '22007' || err.code === '22008' || err.code === '22003') {
+      const m = /type (\w+): "([^"]*)"/.exec(err.message || '');
+      req.log.warn({ pg: { code: err.code, message: err.message, detail: err.detail, table: err.table, column: err.column, routine: err.routine }, route: `${req.method} ${req.url}` }, 'некорректное значение в запросе');
+      reply.code(400).send({ error: m ? `Некорректное значение «${m[2]}» в запросе (ожидался тип ${m[1]})` : 'Некорректный идентификатор или значение в запросе' });
+      return;
+    }
     if (err.code === '23505') { reply.code(409).send({ error: 'Такая запись уже существует' }); return; }
     if (err.code === '23503') { reply.code(400).send({ error: 'Ссылка на несуществующую запись' }); return; }
     req.log.error({ err }, 'unhandled error');

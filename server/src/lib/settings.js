@@ -90,7 +90,7 @@ export const DEFAULTS = {
   'editor.render_crf': 20,              // качество сборки (меньше — лучше и тяжелее)
   'editor.max_assets_mb': 200,          // ограничение на картинки и музыку проекта
   // Загрузка и обработка
-  'upload.max_size_mb': 8192,
+  'upload.max_size_mb': 2097152,        // 2 ТБ; загрузка идёт частями, поэтому ограничение — это про диск и терпение
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
   'upload.who_can_upload': 'all',          // all | allowed | admins
   'upload.default_visibility': 'internal',

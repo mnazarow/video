@@ -8,7 +8,7 @@ import { storage, ensureDir, removeFile, removeDir } from '../lib/storage.js';
 import { canUpload } from '../lib/access.js';
 import { enqueue } from '../lib/jobs.js';
 import { shortId } from '../lib/crypto.js';
-import { badRequest, forbidden, notFound, conflict, extOf, safeFilename, HttpError } from '../lib/util.js';
+import { badRequest, forbidden, notFound, conflict, extOf, safeFilename, HttpError, intOrNull, sizeOrNull, isUuid} from '../lib/util.js';
 import { audit } from '../lib/audit.js';
 import { videoCard } from '../lib/serialize.js';
 import { canEditVideo } from '../lib/access.js';
@@ -18,14 +18,24 @@ import dns from 'node:dns/promises';
 
 export const CHUNK_SIZE = 8 * 1024 * 1024;
 
+/** Размер части для докачки: у больших файлов части крупнее, иначе на терабайт уходят сотни тысяч запросов.
+ *  Верхний предел — 64 МБ: столько пропускает nginx в поставке (client_max_body_size у /api/uploads/). */
+export function chunkSizeFor(size) {
+  const gb = (Number(size) || 0) / (1024 * 1024 * 1024);
+  if (gb > 500) return 64 * 1024 * 1024;
+  if (gb > 100) return 32 * 1024 * 1024;
+  if (gb > 10) return 16 * 1024 * 1024;
+  return CHUNK_SIZE;
+}
+
 async function checkUploadAllowed(req, filename, size) {
   const s = req.settings;
   if (!canUpload(req.user, s)) throw forbidden('Загрузка видео вам не разрешена. Обратитесь к администратору.');
   const ext = extOf(filename);
   const allowed = (s['upload.allowed_extensions'] || []).map((e) => String(e).toLowerCase().replace(/^\./, ''));
   if (!ext || !allowed.includes(ext)) throw badRequest(`Формат .${ext || '?'} не поддерживается. Разрешены: ${allowed.join(', ')}`);
-  const max = (s['upload.max_size_mb'] || 0) * 1024 * 1024;
-  if (!size || size <= 0) throw badRequest('Некорректный размер файла');
+  const max = (Number(s['upload.max_size_mb']) || 0) * 1024 * 1024;
+  if (!Number.isFinite(size) || size <= 0) throw badRequest('Некорректный размер файла: браузер не сообщил размер или файл пустой');
   if (max && size > max) throw badRequest(`Файл больше допустимого размера (${s['upload.max_size_mb']} МБ)`);
   const perDay = s['upload.max_per_day'] || 0;
   if (perDay && req.user.role !== 'admin') {
@@ -56,7 +66,7 @@ async function createVideoAndUpload(req, { filename, size, mime, meta = {} }) {
       `INSERT INTO videos(short_id, owner_id, title, description, visibility, status, moderation_status, original_filename, original_size, comments_mode, category_id, tags)
        VALUES ($1,$2,$3,$4,$5,'uploading',$6,$7,$8,$9,$10,$11) RETURNING *`,
       [shortId(), req.user.id, title, String(meta.description || '').slice(0, 10000), visibility, premod ? 'pending' : 'approved',
-        safeFilename(filename), size, s['comments.default_mode'], meta.categoryId ? Number(meta.categoryId) : null, []],
+        safeFilename(filename), size, s['comments.default_mode'], intOrNull(meta.categoryId), []],
     );
     await ensureDir(storage.videoDir(video.id));
     const tmp = storage.uploadTmp(video.id);
@@ -150,11 +160,15 @@ export default async function uploadRoutes(app) {
     if (replaceVideoId) {
       const existing = await one('SELECT * FROM videos WHERE (id::text = $1 OR short_id = $1) AND deleted_at IS NULL', [String(replaceVideoId)]);
       if (!existing) throw notFound('Видео не найдено');
-      ({ video, upload } = await createReplaceUpload(req, existing, { filename: String(filename || ''), size: Number(size), mime }));
+      const bytes = sizeOrNull(size);
+      if (bytes === null) throw badRequest('Некорректный размер файла: браузер не сообщил размер или файл пустой');
+      ({ video, upload } = await createReplaceUpload(req, existing, { filename: String(filename || ''), size: bytes, mime }));
     } else {
-      ({ video, upload } = await createVideoAndUpload(req, { filename: String(filename || ''), size: Number(size), mime, meta: { title, description, visibility, categoryId } }));
+      const bytes = sizeOrNull(size);
+      if (bytes === null) throw badRequest('Некорректный размер файла: браузер не сообщил размер или файл пустой');
+      ({ video, upload } = await createVideoAndUpload(req, { filename: String(filename || ''), size: bytes, mime, meta: { title, description, visibility, categoryId } }));
     }
-    return { uploadId: upload.id, videoId: video.id, shortId: video.short_id, chunkSize: CHUNK_SIZE, offset: 0, replace: !!upload.replace, video: videoCard(video) };
+    return { uploadId: upload.id, videoId: video.id, shortId: video.short_id, chunkSize: chunkSizeFor(upload.size), offset: 0, replace: !!upload.replace, video: videoCard(video) };
   });
 
   // Импорт по ссылке: прямая ссылка на файл (http/https) или, при установленном yt-dlp, страница видеосервиса
@@ -174,7 +188,7 @@ export default async function uploadRoutes(app) {
       `INSERT INTO videos(short_id, owner_id, title, description, visibility, status, moderation_status, original_filename, original_size, comments_mode, category_id, tags, source_url, processing_stage)
        VALUES ($1,$2,$3,$4,$5,'uploading',$6,$7,0,$8,$9,$10,$11,'import') RETURNING *`,
       [shortId(), req.user.id, String(title || '').trim().slice(0, 150) || guessName.replace(/\.[a-z0-9]+$/i, '') || 'Импорт', String(description || '').slice(0, 10000), vis,
-        premod ? 'pending' : 'approved', safeFilename(guessName), s['comments.default_mode'], categoryId ? Number(categoryId) : null, [], url],
+        premod ? 'pending' : 'approved', safeFilename(guessName), s['comments.default_mode'], intOrNull(categoryId), [], url],
     );
     await ensureDir(storage.videoDir(video.id));
     await enqueue('import_url', { videoId: video.id, url, userId: req.user.id, priority: req.user.role === 'admin' ? 1 : 0 }, { videoId: video.id, priority: 0, maxAttempts: 2 });
@@ -184,15 +198,17 @@ export default async function uploadRoutes(app) {
 
   // 2. Состояние (для возобновления)
   app.get('/:id', { preHandler: app.requireActive }, async (req) => {
+    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
     const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!u) throw notFound('Загрузка не найдена');
     let offset = u.received_bytes;
     try { offset = (await fsp.stat(u.tmp_path)).size; } catch { offset = u.status === 'completed' ? u.size : 0; }
-    return { uploadId: u.id, videoId: u.video_id, offset, size: u.size, status: u.status, chunkSize: CHUNK_SIZE };
+    return { uploadId: u.id, videoId: u.video_id, offset, size: u.size, status: u.status, chunkSize: chunkSizeFor(u.size) };
   });
 
   // 3. Принять часть (PATCH, заголовок Upload-Offset)
-  app.patch('/:id', { preHandler: app.requireActive, bodyLimit: 64 * 1024 * 1024 }, async (req, reply) => {
+  app.patch('/:id', { preHandler: app.requireActive, bodyLimit: 80 * 1024 * 1024 }, async (req, reply) => {
+    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
     const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!u) throw notFound('Загрузка не найдена');
     if (u.status !== 'active') throw conflict('Загрузка уже завершена или отменена');
@@ -221,6 +237,7 @@ export default async function uploadRoutes(app) {
 
   // 4. Завершить
   app.post('/:id/complete', { preHandler: app.requireActive }, async (req) => {
+    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
     const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!u) throw notFound('Загрузка не найдена');
     if (u.status === 'completed') {
@@ -238,6 +255,7 @@ export default async function uploadRoutes(app) {
 
   // 5. Отменить
   app.delete('/:id', { preHandler: app.requireActive }, async (req) => {
+    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
     const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!u) throw notFound('Загрузка не найдена');
     if (u.status === 'active') {
@@ -250,7 +268,7 @@ export default async function uploadRoutes(app) {
   });
 
   // 6. Простая загрузка одним запросом (multipart) — для скриптов и интеграций через API-токен
-  app.post('/simple', { preHandler: app.requireActive, bodyLimit: 16 * 1024 * 1024 * 1024 }, async (req) => {
+  app.post('/simple', { preHandler: app.requireActive, bodyLimit: 2 * 1024 * 1024 * 1024 * 1024 }, async (req) => {
     const tmpDir = path.dirname(storage.uploadTmp('x'));
     await ensureDir(tmpDir);
     // Сначала принимаем файл во временный каталог, затем проверяем размер.
@@ -262,7 +280,7 @@ export default async function uploadRoutes(app) {
     let part = null;
     let size = 0;
     try {
-      for await (const p of req.parts({ limits: { fileSize: (req.settings['upload.max_size_mb'] || 8192) * 1024 * 1024 } })) {
+      for await (const p of req.parts({ limits: { fileSize: (Number(req.settings['upload.max_size_mb']) || 2097152) * 1024 * 1024 } })) {
         if (p.type === 'file') {
           if (part) { p.file.resume(); await new Promise((r) => p.file.once('end', r)); continue; } // второй файл игнорируем
           part = p;

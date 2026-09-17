@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { one, query, many, tx } from '../db.js';
 import { canViewVideo, canEditVideo, isStaff, listVisibilitySql } from '../lib/access.js';
 import { videoFull, videoCard, subtitleOut, userPublic } from '../lib/serialize.js';
-import { badRequest, forbidden, notFound, unauthorized, paging, normalizeTags, parseChapters, toVtt, vttToText, deviceFromUa, extOf, EMAIL_RE } from '../lib/util.js';
+import { badRequest, forbidden, notFound, unauthorized, paging, normalizeTags, parseChapters, toVtt, vttToText, deviceFromUa, extOf, EMAIL_RE, intOrNull} from '../lib/util.js';
 import { storage, ensureDir, removeDir, removeFile, exists } from '../lib/storage.js';
 import { resizeImage, frameAt } from '../lib/ffmpeg.js';
 import { enqueue } from '../lib/jobs.js';
@@ -237,7 +237,7 @@ export default async function videoRoutes(app) {
     const add = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
     if (b.title !== undefined) { const t = String(b.title).trim().slice(0, 150); if (!t) throw badRequest('Название не может быть пустым'); add('title', t); }
     if (b.description !== undefined) add('description', String(b.description).slice(0, 10000));
-    if (b.categoryId !== undefined) add('category_id', b.categoryId ? Number(b.categoryId) : null);
+    if (b.categoryId !== undefined) add('category_id', intOrNull(b.categoryId));
     if (b.tags !== undefined) add('tags', normalizeTags(b.tags));
     if (b.language !== undefined) add('language', String(b.language).slice(0, 8) || 'ru');
     if (b.visibility !== undefined) {
