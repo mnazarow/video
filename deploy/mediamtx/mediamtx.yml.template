@@ -9,7 +9,9 @@ api: yes
 apiAddress: ${BIND_LOCAL}:9997
 metrics: no
 pprof: no
-playback: no
+# Сервер воспроизведения записей: перемотка эфира назад и просмотр с начала (1.9)
+playback: yes
+playbackAddress: ${BIND_LOCAL}:9996
 
 # --- Авторизация через HTTP-хук CorpVideo ---
 authMethod: http

@@ -32,6 +32,26 @@ async function toggleReminder() {
   try { const r = await post(`/api/live/${stream.value.shortId}/remind`, { on: !stream.value.reminder }); stream.value.reminder = r.reminder; stream.value.reminderCount = r.count; ui.toast(r.reminder ? 'Напомним за 15 минут до начала' : 'Напоминание отключено', { type: 'success' }); } catch (e) { ui.toast(e.message, { type: 'error' }); }
 }
 
+// 1.9: перемотка эфира назад (DVR) — портал отдаёт запись идущей трансляции с нужной секунды
+const dvr = ref(null);           // { enabled, available, windowSec }
+const dvrSrc = ref('');          // адрес записи, когда зритель ушёл из прямого эфира
+const dvrFrom = ref(0);
+async function loadDvr() {
+  if (!stream.value || stream.value.status !== 'live' || auth.config?.dvrEnabled === false || stream.value.dvr === false) { dvr.value = null; return; }
+  try { dvr.value = await get(`/api/live/${stream.value.shortId}/dvr`); } catch { dvr.value = null; }
+}
+function rewind(sec) {
+  if (!dvr.value?.available) return ui.toast('Запись эфира ещё не накопилась — попробуйте через минуту');
+  dvrFrom.value = Math.max(0, Math.round((Date.now() - new Date(stream.value.startedAt).getTime()) / 1000) - sec);
+  dvrSrc.value = `/api/live/${stream.value.shortId}/dvr/play?back=${sec}`;
+}
+function fromStart() {
+  if (!dvr.value?.available) return ui.toast('Запись эфира ещё не накопилась — попробуйте через минуту');
+  dvrFrom.value = dvr.value.offsetSec || 0;
+  dvrSrc.value = `/api/live/${stream.value.shortId}/dvr/play?from=${dvr.value.offsetSec || 0}`;
+}
+function backToLive() { dvrSrc.value = ''; playerKey.value += 1; }
+
 // 1.6: живые субтитры эфира
 const captions = ref([]);            // последние реплики
 const captionsOn = ref(true);        // зритель может выключить их у себя
@@ -95,6 +115,7 @@ onMounted(() => {
     }),
   );
 });
+watch(() => stream.value?.status, (st) => { if (st === 'live') loadDvr(); else { dvr.value = null; dvrSrc.value = ''; } });
 onBeforeUnmount(() => { off.forEach((f) => f()); stopAttendance(); });
 watch(() => route.params.id, load);
 </script>
@@ -103,7 +124,11 @@ watch(() => route.params.id, load);
   <div v-if="error" class="page"><EmptyState :icon="error.status === 401 ? 'lock' : 'live'" :title="error.status === 401 ? 'Требуется вход' : 'Трансляция не найдена'" :text="error.message"><router-link v-if="error.status === 401" :to="{ name: 'login', query: { next: route.fullPath } }" class="btn primary">Войти</router-link></EmptyState></div>
   <div v-else-if="stream" class="live-page">
     <div class="live-main">
-      <VideoPlayer v-if="stream.status === 'live'" :key="playerKey" :qoe-stream-id="stream.id" qoe-source="live" :src="stream.hlsUrl" :poster="stream.thumbnailUrl" live autoplay :allow-theater="false" :allow-mini="false" :title="stream.title" :caption-lines="captionLines" />
+      <VideoPlayer v-if="stream.status === 'live' && !dvrSrc" :key="playerKey" :qoe-stream-id="stream.id" qoe-source="live" :src="stream.hlsUrl" :poster="stream.thumbnailUrl" live autoplay :allow-theater="false" :allow-mini="false" :title="stream.title" :caption-lines="captionLines" />
+      <!-- Перемотка эфира назад (1.9): проигрывается запись идущей трансляции -->
+      <div v-else-if="stream.status === 'live' && dvrSrc" class="player dvr-player">
+        <video :src="dvrSrc" controls autoplay playsinline style="width:100%;height:100%;background:#000"></video>
+      </div>
       <div v-else class="player live-placeholder">
         <div class="col" style="align-items:center; text-align:center; padding: 24px">
           <Icon name="broadcast" :size="48" />
@@ -126,6 +151,19 @@ watch(() => route.params.id, load);
           <router-link v-if="stream.status === 'ended' && stream.recordingShortId" :to="`/watch/${stream.recordingShortId}`" class="btn primary mt-8"><Icon name="play" :size="18" /> Смотреть запись</router-link>
           <p v-else-if="stream.status === 'ended' && stream.record" class="small" style="opacity:.8">Запись обрабатывается и скоро появится на канале</p>
         </div>
+      </div>
+      <!-- Кнопки перемотки эфира (1.9) -->
+      <div v-if="stream.status === 'live' && dvr?.enabled" class="row wrap gap-8 mt-8" style="align-items:center">
+        <template v-if="!dvrSrc">
+          <button class="btn sm" :disabled="!dvr.available" @click="rewind(30)"><Icon name="back10" :size="16" /> Назад на 30 секунд</button>
+          <button class="btn sm" :disabled="!dvr.available" @click="fromStart()"><Icon name="replay" :size="16" /> Смотреть с начала эфира</button>
+          <span class="small muted" v-if="dvr.available">Доступно для перемотки: {{ Math.floor(dvr.available / 60) }} мин</span>
+          <span class="small muted" v-else>Запись эфира ещё накапливается</span>
+        </template>
+        <template v-else>
+          <span class="badge warning"><Icon name="history" :size="12" /> Смотрите запись эфира</span>
+          <button class="btn sm primary" @click="backToLive"><Icon name="live" :size="16" /> Вернуться в прямой эфир</button>
+        </template>
       </div>
       <div class="mt-16">
         <div class="row wrap gap-8 mb-8">

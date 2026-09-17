@@ -10,8 +10,16 @@ import { requireEditable, requireViewable } from './videos.js';
 import { screenTextOf, ocrAvailable } from '../lib/ocr.js';
 import { languageLabel } from '../jobs/translate.js';
 import { normalizeSegments, invertCuts } from '../jobs/editor.js';
+import { normalizeRegions } from '../jobs/blur.js';
+import { findFillers, cutsFromSelection } from '../lib/textedit.js';
+import { videoSource } from '../lib/ocr.js';
+import { spawn } from 'node:child_process';
+import fsp from 'node:fs/promises';
+import { storage } from '../lib/storage.js';
+import { vttToSegments } from '../lib/util.js';
+import { config } from '../config.js';
 
-const EDITOR_JOBS = ['video_edit', 'remove_silence', 'clip_create', 'ocr', 'subtitle_translate'];
+const EDITOR_JOBS = ['video_edit', 'remove_silence', 'clip_create', 'ocr', 'subtitle_translate', 'video_blur', 'face_detect'];
 
 function jobOut(j) {
   return { id: Number(j.id), type: j.type, status: j.status, progress: j.progress || 0, stage: j.stage, error: j.error, result: j.result, payload: { start: j.payload?.start, end: j.payload?.end, apply: j.payload?.apply, vertical: j.payload?.vertical, language: j.payload?.language, op: j.payload?.op }, createdAt: j.created_at, finishedAt: j.finished_at };
@@ -24,7 +32,7 @@ function num(v, name, { min = 0, max = Infinity } = {}) {
 }
 
 // Разрушающие операции (меняют файл видео). Два таких задания одновременно перезаписали бы работу друг друга.
-const DESTRUCTIVE_SQL = `(j.type = 'video_edit' OR (j.type = 'remove_silence' AND j.payload->>'apply' = 'true'))`;
+const DESTRUCTIVE_SQL = `(j.type IN ('video_edit','video_blur') OR (j.type = 'remove_silence' AND j.payload->>'apply' = 'true'))`;
 
 /**
  * Поставить разрушающее задание, только если другого такого нет.
@@ -68,6 +76,8 @@ export default async function editorRoutes(app) {
       silence: { noiseDb: s['editor.silence_db'], minSec: s['editor.silence_min_sec'], keepSec: s['editor.silence_keep_sec'] },
       history: v.edit_history || [], jobs: jobs.map(jobOut), clips: clips.map(videoCard),
       ocr: { enabled: !!s['ocr.enabled'], status: v.ocr_status, at: v.ocr_at },
+      blur: { enabled: !!s['editor.blur_enabled'], faces: !!s['editor.faces_enabled'], strength: s['editor.blur_strength'], regions: v.blur_regions || [] },
+      textEdit: { enabled: !!s['editor.text_edit'], fillerWords: s['editor.filler_words'] || [] },
     };
   });
 
@@ -122,6 +132,105 @@ export default async function editorRoutes(app) {
       : await enqueue('remove_silence', payload, { videoId: v.id, priority: 1, maxAttempts: 1, dedupe: true });
     await audit(req, 'video.edit', { targetType: 'video', targetId: v.id, details: { op: b.apply ? 'remove_silence' : 'detect_silence' } });
     return { ok: true, jobId: Number(j.id) };
+  });
+
+  // --- Размытие лиц и областей в кадре (1.9) ---------------------------------------------------
+  app.post('/videos/:id/editor/blur', { preHandler: app.requireActive }, async (req) => {
+    const v = await ensureEditable(req, req.params.id);
+    if (!req.settings['editor.blur_enabled']) throw forbidden('Размытие отключено администратором');
+    const regions = normalizeRegions(req.body?.regions, Number(v.duration) || 0);
+    if (!regions.length) throw badRequest('Укажите хотя бы одну область размытия');
+    const j = await enqueueExclusiveEdit(v.id, 'video_blur', { videoId: v.id, regions, byUserId: req.user.id });
+    await audit(req, 'video.edit', { targetType: 'video', targetId: v.id, details: { op: 'blur', regions: regions.length } });
+    return { ok: true, jobId: Number(j.id), regions };
+  });
+
+  // Автопоиск лиц: отдельное задание, результат забирается через /editor/jobs/:jobId
+  app.post('/videos/:id/editor/faces', { preHandler: app.requireActive }, async (req) => {
+    const v = await ensureEditable(req, req.params.id);
+    if (!req.settings['editor.blur_enabled'] || !req.settings['editor.faces_enabled']) throw forbidden('Автопоиск лиц отключён администратором');
+    const j = await enqueue('face_detect', { videoId: v.id, byUserId: req.user.id, step: 2 }, { videoId: v.id, priority: 1, maxAttempts: 1, dedupe: true });
+    return { ok: true, jobId: Number(j.id) };
+  });
+
+  // Кадр видео для рисования рамок (jpeg)
+  app.get('/videos/:id/editor/frame', { preHandler: app.requireActive }, async (req, reply) => {
+    const v = await ensureEditable(req, req.params.id);
+    const t = Math.max(0, Math.min(Number(v.duration) || 0, Number(req.query.t) || 0));
+    const src = await videoSource(v);
+    const buf = await new Promise((resolve, reject) => {
+      const child = spawn(config.ffmpegPath, ['-hide_banner', '-nostdin', '-loglevel', 'error', '-ss', String(t), '-i', src, '-frames:v', '1', '-vf', "scale='min(960,iw)':-2", '-f', 'image2', '-c:v', 'mjpeg', '-q:v', '4', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const chunks = []; let err = '';
+      child.stdout.on('data', (d) => chunks.push(d));
+      child.stderr.on('data', (d) => { err += d.toString().slice(0, 2000); });
+      child.on('error', (e) => reject(new Error(e.message)));
+      child.on('close', () => { const b = Buffer.concat(chunks); b.length ? resolve(b) : reject(new Error(err.trim().split('\n').pop() || 'кадр не получен')); });
+    }).catch((e) => { throw badRequest('Не удалось получить кадр: ' + e.message); });
+    reply.header('Content-Type', 'image/jpeg').header('Cache-Control', 'private, max-age=600');
+    return reply.send(buf);
+  });
+
+  // --- Монтаж по расшифровке и слова-паразиты (1.9) ---------------------------------------------
+  async function transcriptOf(video, trackId) {
+    const sub = trackId
+      ? await one(`SELECT * FROM subtitles WHERE video_id = $1 AND id::text = $2 AND status = 'ready'`, [video.id, String(trackId)])
+      : await one(`SELECT * FROM subtitles WHERE video_id = $1 AND status = 'ready' AND path IS NOT NULL ORDER BY is_default DESC, (kind = 'manual') DESC, created_at LIMIT 1`, [video.id]);
+    if (!sub?.path) return { sub: null, segments: [] };
+    const vtt = await fsp.readFile(storage.abs(sub.path), 'utf8').catch(() => '');
+    return { sub, segments: vttToSegments(vtt) };
+  }
+
+  app.get('/videos/:id/editor/transcript', { preHandler: app.requireActive }, async (req) => {
+    const v = await ensureEditable(req, req.params.id);
+    const tracks = await many(`SELECT id, language, label, kind, is_default FROM subtitles WHERE video_id = $1 AND status = 'ready' AND path IS NOT NULL ORDER BY is_default DESC, created_at`, [v.id]);
+    const { sub, segments } = await transcriptOf(v, req.query.track);
+    return {
+      enabled: !!req.settings['editor.text_edit'], duration: Number(v.duration) || 0,
+      track: sub ? { id: sub.id, language: sub.language, label: sub.label, kind: sub.kind } : null,
+      tracks: tracks.map((t) => ({ id: t.id, language: t.language, label: t.label, kind: t.kind })),
+      segments: segments.map((x, i) => ({ index: i, start: Math.round(x.start * 100) / 100, end: Math.round(x.end * 100) / 100, text: x.text })),
+    };
+  });
+
+  // Слова-паразиты: поиск (apply=false) и вырезание выбранных
+  app.post('/videos/:id/editor/fillers', { preHandler: app.requireActive }, async (req) => {
+    const v = await ensureEditable(req, req.params.id);
+    if (!req.settings['editor.text_edit']) throw forbidden('Монтаж по расшифровке отключён администратором');
+    const duration = Number(v.duration) || 0;
+    const b = req.body || {};
+    const custom = Array.isArray(b.words) ? b.words.slice(0, 50).map((w) => String(w).slice(0, 40)) : null;
+    const { sub, segments } = await transcriptOf(v, b.track);
+    if (!sub) throw badRequest('У видео нет расшифровки — включите распознавание речи или загрузите субтитры');
+    const items = findFillers(segments, custom && custom.length ? custom : req.settings['editor.filler_words']);
+    if (!b.apply) return { items, total: items.length, totalSec: Math.round(items.reduce((n, x) => n + (x.end - x.start), 0) * 10) / 10, track: { id: sub.id, label: sub.label } };
+    const chosen = Array.isArray(b.items) && b.items.length
+      ? b.items.map((x) => ({ start: Number(x.start), end: Number(x.end) })).filter((x) => Number.isFinite(x.start) && Number.isFinite(x.end))
+      : items;
+    const cuts = cutsFromSelection(chosen, duration);
+    if (!cuts.length) throw badRequest('Слова-паразиты не выбраны');
+    const keep = invertCuts(cuts, duration);
+    if (!keep.length) throw badRequest('После вырезания не остаётся ни одного фрагмента');
+    const j = await enqueueExclusiveEdit(v.id, 'video_edit', { videoId: v.id, cuts, byUserId: req.user.id, op: 'fillers' });
+    await audit(req, 'video.edit', { targetType: 'video', targetId: v.id, details: { op: 'fillers', cuts: cuts.length } });
+    return { ok: true, jobId: Number(j.id), cuts, removedSec: Math.round(cuts.reduce((n, c) => n + (c.end - c.start), 0) * 10) / 10 };
+  });
+
+  // Вырезание выбранных фраз расшифровки
+  app.post('/videos/:id/editor/text-cut', { preHandler: app.requireActive }, async (req) => {
+    const v = await ensureEditable(req, req.params.id);
+    if (!req.settings['editor.text_edit']) throw forbidden('Монтаж по расшифровке отключён администратором');
+    const duration = Number(v.duration) || 0;
+    const { sub, segments } = await transcriptOf(v, req.body?.track);
+    if (!sub) throw badRequest('У видео нет расшифровки');
+    const idx = Array.isArray(req.body?.segments) ? req.body.segments.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < segments.length) : [];
+    const chosen = idx.length ? idx.map((i) => segments[i]) : [];
+    const cuts = cutsFromSelection(chosen, duration, { pad: 0.02, gap: 0.3 });
+    if (!cuts.length) throw badRequest('Выберите фразы, которые нужно вырезать');
+    const keep = invertCuts(cuts, duration);
+    if (!keep.length) throw badRequest('После вырезания не остаётся ни одного фрагмента');
+    const j = await enqueueExclusiveEdit(v.id, 'video_edit', { videoId: v.id, cuts, byUserId: req.user.id, op: 'transcript_cut' });
+    await audit(req, 'video.edit', { targetType: 'video', targetId: v.id, details: { op: 'transcript_cut', phrases: idx.length } });
+    return { ok: true, jobId: Number(j.id), cuts, removedSec: Math.round(cuts.reduce((n, c) => n + (c.end - c.start), 0) * 10) / 10 };
   });
 
   // --- Клип как отдельное видео (в т. ч. вертикальный для ленты коротких) ----------------------

@@ -65,6 +65,7 @@ export const config = {
   liveRecordDir: env('LIVE_RECORD_DIR', path.join(dataDir, 'live')),
   webDist: env('WEB_DIST', path.resolve(ROOT, '..', 'web', 'dist')),
   ffmpegPath: env('FFMPEG_PATH', 'ffmpeg'),
+  pythonPath: env('PYTHON_PATH', 'python3'),      // автопоиск лиц (scripts/facedetect.py, нужен opencv)
   ffprobePath: env('FFPROBE_PATH', 'ffprobe'),
   ffmpegThreads: int('FFMPEG_THREADS', 0),
   workerConcurrency: int('WORKER_CONCURRENCY', Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)))),
@@ -79,6 +80,8 @@ export const config = {
     rtmpPublicUrl: env('LIVE_RTMP_URL', ''),   // rtmp://host:1935/live
     srtPublicUrl: env('LIVE_SRT_URL', ''),     // srt://host:8890
     whipPublicUrl: env('LIVE_WHIP_URL', ''),   // https://host/whip
+    playbackUrl: env('MEDIAMTX_PLAYBACK_URL', 'http://127.0.0.1:9996'), // сервер воспроизведения записей (перемотка эфира)
+    rtspUrl: env('MEDIAMTX_RTSP_URL', 'rtsp://127.0.0.1:8554'),        // источник для ретрансляции на площадки
   },
   version: readVersion(),
 };

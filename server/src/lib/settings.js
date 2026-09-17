@@ -68,6 +68,19 @@ export const DEFAULTS = {
   'chapters.auto_enabled': true,        // автоглавы по сменам кадра (слайдам)
   'storage.quota_mb': 0,                // квота на канал сотрудника, МБ (0 — без ограничений)
   'storage.originals_days': 0,          // через сколько дней удалять исходники (0 — хранить всегда)
+  // 1.9 — приватность в кадре, монтаж по тексту, вещание наружу, сроки хранения
+  'editor.blur_enabled': true,          // размытие лиц и областей в кадре
+  'editor.blur_strength': 22,           // сила размытия по умолчанию (радиус)
+  'editor.faces_enabled': true,         // автопоиск лиц (нужен python3 с opencv)
+  'editor.text_edit': true,             // монтаж по расшифровке и удаление слов-паразитов
+  'editor.filler_words': ['э', 'э-э', 'ээ', 'эм', 'м-м', 'мм', 'ну', 'вот', 'типа', 'как бы', 'значит', 'короче', 'в общем', 'собственно', 'так сказать', 'это самое', 'ага'],
+  'live.restream_enabled': true,        // ретрансляция эфира на внешние площадки
+  'live.dvr': true,                     // перемотка эфира назад и просмотр с начала
+  'live.dvr_minutes': 120,              // насколько глубоко можно отматывать эфир
+  'showcases.enabled': true,            // витрины-подборки со своим адресом
+  'lifecycle.enabled': true,            // правила хранения, архив и пересмотр актуальности
+  'lifecycle.freshness_months': 0,      // по умолчанию «актуально до» через N месяцев (0 — не заполнять)
+  'lifecycle.freshness_remind_days': 7, // за сколько дней напомнить автору о пересмотре
   // Загрузка и обработка
   'upload.max_size_mb': 8192,
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
@@ -391,6 +404,15 @@ export async function publicSettings() {
     reviewEnabled: s['review.enabled'],
     autoChapters: s['chapters.auto_enabled'],
     storageQuotaMb: s['storage.quota_mb'],
+    // 1.9
+    blurEnabled: s['editor.blur_enabled'] && s['editor.enabled'],
+    facesEnabled: s['editor.faces_enabled'] && s['editor.blur_enabled'] && s['editor.enabled'],
+    textEditEnabled: s['editor.text_edit'] && s['editor.enabled'],
+    restreamEnabled: s['live.restream_enabled'] && s['live.enabled'],
+    dvrEnabled: s['live.dvr'] && s['live.enabled'],
+    dvrMinutes: s['live.dvr_minutes'],
+    showcasesEnabled: s['showcases.enabled'],
+    lifecycleEnabled: s['lifecycle.enabled'],
   };
 }
 

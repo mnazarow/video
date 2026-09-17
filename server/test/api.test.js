@@ -1838,6 +1838,361 @@ test('календарь публикаций, карточки мессендж
   assert.equal(chapters[2].title, 'Часть 3', 'без расшифровки — номер части');
 });
 
+test('размытие в кадре: автопоиск лиц, рамки и пересборка видео', async () => {
+  const { blurFilter, normalizeRegions } = await import('../src/jobs/blur.js');
+  // Разбор рамок: доли кадра, отсечение выходов за край, отрезок времени
+  const norm = normalizeRegions([{ x: 0.1, y: 0.2, w: 0.3, h: 0.25, start: 1, end: 5 }, { x: 0.9, y: 0.9, w: 0.5, h: 0.5 }, { x: 0, y: 0, w: 0.001, h: 0.5 }], 30);
+  assert.equal(norm.length, 2, 'слишком узкая рамка отброшена');
+  assert.ok(Math.abs(norm[1].w - 0.1) < 1e-6, 'рамка обрезана по краю кадра');
+  assert.equal(norm[0].end, 5);
+  const filter = blurFilter(norm, 1280, 720);
+  assert.ok(filter.includes('split=3[base][c0][c1]'), 'кадр разветвлён по числу рамок');
+  assert.ok(/boxblur=luma_radius=\d+/.test(filter));
+  assert.ok(filter.includes("enable='between(t,1,5)'"), 'рамка работает только на своём отрезке');
+
+  // Настоящее видео: лицо в первых шести секундах, дальше — ровный фон
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-blur-'));
+  const facePng = path.join(dir, 'face.png');
+  execFileSync('python3', ['-c', `
+from skimage import data
+import cv2
+img = cv2.cvtColor(data.astronaut(), cv2.COLOR_RGB2BGR)
+big = cv2.copyMakeBorder(cv2.resize(img, (480, 480)), 0, 0, 160, 160, cv2.BORDER_CONSTANT, value=(30, 30, 30))
+cv2.imwrite(${JSON.stringify(facePng)}, big)
+`]);
+  const p1 = path.join(dir, 'p1.mp4'), p2 = path.join(dir, 'p2.mp4'), src = path.join(dir, 'faces.mp4');
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-loop', '1', '-i', facePng, '-t', '6', '-r', '25', '-vf', 'scale=800:480', '-pix_fmt', 'yuv420p', p1]);
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=gray:s=800x480:r=25:d=5', '-pix_fmt', 'yuv420p', p2]);
+  fs.writeFileSync(path.join(dir, 'l.txt'), `file '${p1}'\nfile '${p2}'\n`);
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', path.join(dir, 'l.txt'), '-c', 'copy', src]);
+
+  const data = fs.readFileSync(src);
+  const init = await admin.post('/api/uploads', { filename: 'Видео с лицом.mp4', size: data.length, mime: 'video/mp4', title: 'Видео с лицом', visibility: 'private' });
+  assert.equal(init.status, 200, init.text);
+  const vid = init.json.videoId;
+  for (let off = 0; off < data.length; off += 400000) {
+    const part = data.subarray(off, Math.min(data.length, off + 400000));
+    const r = await admin.req('PATCH', `/api/uploads/${init.json.uploadId}`, part, { headers: { 'content-type': 'application/offset+octet-stream', 'upload-offset': String(off) } });
+    assert.equal(r.status, 200, r.text);
+  }
+  assert.equal((await admin.post(`/api/uploads/${init.json.uploadId}/complete`, {})).status, 200);
+  let v;
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    v = (await admin.get(`/api/videos/${vid}`)).json.video;
+    if (['ready', 'failed'].includes(v.status)) break;
+  }
+  assert.equal(v.status, 'ready', 'видео с лицом обработано');
+
+  // Кадр для рисования рамок
+  const frame = await admin.get(`/api/videos/${vid}/editor/frame?t=2`);
+  assert.equal(frame.status, 200);
+  assert.equal(frame.headers.get('content-type'), 'image/jpeg');
+
+  // Автопоиск лиц
+  const fj = await admin.post(`/api/videos/${vid}/editor/faces`, {});
+  assert.equal(fj.status, 200, fj.text);
+  let faces = null;
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const j = (await admin.get(`/api/videos/${vid}/editor/jobs/${fj.json.jobId}`)).json.job;
+    if (j.status === 'done') { faces = j.result; break; }
+    if (['failed', 'cancelled'].includes(j.status)) { faces = { error: j.error }; break; }
+  }
+  assert.ok(faces && Array.isArray(faces.regions), 'детектор ответил: ' + JSON.stringify(faces));
+  assert.ok(faces.regions.length >= 1, 'лицо найдено');
+  const face = faces.regions[0];
+  assert.ok(face.start < 3 && face.end <= 12, 'отрезок времени лица совпал с первой частью ролика');
+
+  // Применяем размытие по найденной рамке
+  const ap = await admin.post(`/api/videos/${vid}/editor/blur`, { regions: [{ ...face, end: 6 }] });
+  assert.equal(ap.status, 200, ap.text);
+  let blurJob = null;
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const j = (await admin.get(`/api/videos/${vid}/editor/jobs/${ap.json.jobId}`)).json.job;
+    if (['done', 'failed', 'cancelled'].includes(j.status)) { blurJob = j; break; }
+  }
+  assert.equal(blurJob?.status, 'done', 'размытие выполнено: ' + blurJob?.error);
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    v = (await admin.get(`/api/videos/${vid}`)).json.video;
+    if (v.status === 'ready') break;
+  }
+  assert.equal(v.status, 'ready', 'видео пересобрано');
+  assert.equal(v.blurRegions.length, 1, 'рамки сохранены у видео');
+
+  // Проверяем результат по картинке: в рамке стало заметно более гладко
+  const outFile = path.join(dir, 'out.mp4');
+  const mp4 = await admin.req('GET', v.mp4Url);
+  assert.equal(mp4.status, 200, 'mp4 доступен владельцу');
+  fs.writeFileSync(outFile, Buffer.from(await (await fetch(BASE + v.mp4Url, { headers: { cookie: admin.cookie } })).arrayBuffer()));
+  const sharp = execFileSync('python3', ['-c', `
+import cv2, json, sys
+cap = cv2.VideoCapture(${JSON.stringify(outFile)})
+def s(t, r):
+    cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+    ok, f = cap.read()
+    if not ok: return -1
+    h, w = f.shape[:2]
+    x, y = int(r[0] * w), int(r[1] * h)
+    roi = f[y:y + int(r[3] * h), x:x + int(r[2] * w)]
+    if roi.size == 0: return -1
+    return float(cv2.Laplacian(cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
+r = [${face.x}, ${face.y}, ${face.w}, ${face.h}]
+print(json.dumps({"blurred": s(3, r), "clean": s(9, r)}))
+`]).toString();
+  const res = JSON.parse(sharp);
+  assert.ok(res.blurred >= 0 && res.blurred < 40, 'область с лицом размыта: ' + JSON.stringify(res));
+  await admin.del(`/api/videos/${vid}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('монтаж по расшифровке: фразы, слова-паразиты и границы', async () => {
+  const { findFillers, cutsFromSelection } = await import('../src/lib/textedit.js');
+  const segs = [
+    { start: 0, end: 4, text: 'Ну, сегодня мы как бы обсудим план работ' },
+    { start: 4, end: 8, text: 'Это, типа, первый пункт, вот' },
+    { start: 8, end: 12, text: 'Ничего лишнего в этой фразе нет' },
+  ];
+  const items = findFillers(segs, ['ну', 'как бы', 'типа', 'вот']);
+  assert.equal(items.length, 4, 'найдены все слова-паразиты: ' + JSON.stringify(items.map((x) => x.word)));
+  assert.ok(items.every((x) => x.end > x.start && x.end <= 8.01), 'время слова внутри своей фразы');
+  assert.ok(items[0].text.includes('⟦'), 'слово подсвечено в контексте');
+  assert.equal(findFillers(segs, ['лан']).length, 0, 'часть слова («план») не считается словом-паразитом');
+  const cuts = cutsFromSelection([{ start: 1, end: 1.4 }, { start: 1.5, end: 2 }, { start: 9, end: 9.3 }], 12);
+  assert.equal(cuts.length, 2, 'близкие отрезки склеены');
+
+  // Через API: подкладываем расшифровку со словами-паразитами и вырезаем их
+  const tmp = path.join(os.tmpdir(), `cv-text-${stamp}.mp4`);
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=25:duration=12', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=12', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', tmp]);
+  const data = fs.readFileSync(tmp);
+  const init = await admin.post('/api/uploads', { filename: 'Планёрка с паразитами.mp4', size: data.length, mime: 'video/mp4', title: 'Планёрка с паразитами', visibility: 'private' });
+  const vid = init.json.videoId;
+  for (let off = 0; off < data.length; off += 400000) {
+    const part = data.subarray(off, Math.min(data.length, off + 400000));
+    await admin.req('PATCH', `/api/uploads/${init.json.uploadId}`, part, { headers: { 'content-type': 'application/offset+octet-stream', 'upload-offset': String(off) } });
+  }
+  await admin.post(`/api/uploads/${init.json.uploadId}/complete`, {});
+  let v;
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    v = (await admin.get(`/api/videos/${vid}`)).json.video;
+    if (['ready', 'failed'].includes(v.status)) break;
+  }
+  assert.equal(v.status, 'ready');
+  const durationBefore = v.duration;
+
+  const vtt = ['WEBVTT', '', '00:00:00.000 --> 00:00:04.000', 'Ну, сегодня мы как бы обсудим план работ', '', '00:00:04.000 --> 00:00:08.000', 'Это, типа, первый пункт, вот', '', '00:00:08.000 --> 00:00:12.000', 'Ничего лишнего в этой фразе нет', ''].join('\n');
+  const fd = new FormData();
+  fd.append('file', new Blob([vtt], { type: 'text/vtt' }), 'ru.vtt');
+  fd.append('language', 'ru');
+  fd.append('label', 'Русские');
+  const up = await admin.post(`/api/videos/${vid}/subtitles`, fd);
+  assert.equal(up.status, 200, up.text);
+
+  const tr = await admin.get(`/api/videos/${vid}/editor/transcript`);
+  assert.equal(tr.status, 200, tr.text);
+  assert.equal(tr.json.segments.length, 3, 'расшифровка разобрана по фразам');
+
+  const found = await admin.post(`/api/videos/${vid}/editor/fillers`, {});
+  assert.equal(found.status, 200, found.text);
+  assert.ok(found.json.total >= 4, 'слова-паразиты найдены через API: ' + found.json.total);
+
+  const applied = await admin.post(`/api/videos/${vid}/editor/fillers`, { apply: true });
+  assert.equal(applied.status, 200, applied.text);
+  assert.ok(applied.json.removedSec > 0.5, 'что-то вырезано');
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const j = (await admin.get(`/api/videos/${vid}/editor/jobs/${applied.json.jobId}`)).json.job;
+    if (['done', 'failed', 'cancelled'].includes(j.status)) { assert.equal(j.status, 'done', j.error); break; }
+  }
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    v = (await admin.get(`/api/videos/${vid}`)).json.video;
+    if (v.status === 'ready' && v.duration < durationBefore - 0.3) break;
+  }
+  assert.ok(v.duration < durationBefore - 0.5, `длительность уменьшилась: было ${durationBefore}, стало ${v.duration}`);
+
+  // Вырезание выбранной фразы
+  const cut = await admin.post(`/api/videos/${vid}/editor/text-cut`, { segments: [2] });
+  assert.equal(cut.status, 200, cut.text);
+  assert.ok(cut.json.cuts.length === 1);
+  const bad = await admin.post(`/api/videos/${vid}/editor/text-cut`, { segments: [] });
+  assert.equal(bad.status, 400, 'без выбранных фраз — понятный отказ');
+  await admin.del(`/api/videos/${vid}`);
+  fs.unlinkSync(tmp);
+});
+
+test('витрины: разделы, доступ и меню', async () => {
+  const r = await admin.post('/api/admin/showcases', { title: 'Новичку в компании', subtitle: 'С чего начать', visibility: 'internal', inMenu: true });
+  assert.equal(r.status, 200, r.text);
+  const sc = r.json.showcase;
+  assert.ok(sc.slug, 'адрес витрины сгенерирован');
+
+  const mine = (await admin.get('/api/studio/videos?limit=5')).json.videos.filter((x) => x.status === 'ready');
+  const secs = await admin.put(`/api/admin/showcases/${sc.id}/sections`, {
+    sections: [
+      { title: 'Смотреть первым делом', kind: 'videos', layout: 'hero', videoIds: mine.slice(0, 2).map((x) => x.id) },
+      { title: 'Новое на портале', kind: 'latest', layout: 'grid', maxItems: 6 },
+    ],
+  });
+  assert.equal(secs.status, 200, secs.text);
+  assert.equal(secs.json.sections.length, 2);
+
+  const page = await admin.get(`/api/showcases/${sc.slug}`);
+  assert.equal(page.status, 200, page.text);
+  assert.equal(page.json.showcase.sections.length, 2);
+  assert.ok(page.json.showcase.sections[1].videos.length > 0, 'раздел «новое» наполняется сам');
+
+  const menu = await admin.get('/api/showcases?menu');
+  assert.ok(menu.json.showcases.some((x) => x.id === sc.id), 'витрина видна в меню');
+
+  // Гость не видит витрину для сотрудников, а по публичной — видит
+  const g1 = await guest.get(`/api/showcases/${sc.slug}`);
+  assert.ok([403, 404].includes(g1.status), 'гостю внутренняя витрина закрыта');
+  await admin.patch(`/api/admin/showcases/${sc.id}`, { visibility: 'public' });
+  const g2 = await guest.get(`/api/showcases/${sc.slug}`);
+  assert.equal(g2.status, 200, 'публичная витрина открыта гостю');
+  assert.ok(g2.json.showcase.sections.every((s) => s.videos.every((v) => v.visibility === 'public')), 'гостю показываются только публичные видео');
+
+  // Обычный пользователь не может создавать витрины
+  const u = await user.post('/api/admin/showcases', { title: 'Чужая витрина' });
+  assert.equal(u.status, 403);
+  assert.equal((await admin.del(`/api/admin/showcases/${sc.id}`)).status, 200);
+});
+
+test('сроки хранения: правила, архив, юридическая блокировка и актуальность', async () => {
+  const { ruleWhere, warnWhere } = await import('../src/jobs/retention.js');
+  const w = ruleWhere({ after_days: 30, action: 'archive', scope: 'tag', tag: 'черновик' });
+  assert.ok(w.sql.includes('v.legal_hold = false'), 'правила обходят видео с отметкой «не удалять»');
+  assert.ok(w.sql.includes('v.archived_at IS NULL'));
+  assert.deepEqual(w.params, ['30', 'черновик']);
+  const warn = warnWhere({ after_days: 30, warn_days: 7, action: 'archive', scope: 'all' });
+  assert.deepEqual(warn.params, ['23', '30'], 'предупреждаем за неделю до срока');
+
+  const rule = await admin.post('/api/admin/retention', { name: 'Тестовое правило', scope: 'tag', tag: `t${stamp}`, afterDays: 1, action: 'archive', warnDays: 0 });
+  assert.equal(rule.status, 200, rule.text);
+  const bad = await admin.post('/api/admin/retention', { name: 'Без категории', scope: 'category', afterDays: 10 });
+  assert.equal(bad.status, 400, 'правило по категории требует категорию');
+
+  // Отдельное видео для проверки: тег правила и «старая» публикация
+  const tmpR = path.join(os.tmpdir(), `cv-ret-${stamp}.mp4`);
+  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=25:duration=4', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', tmpR]);
+  const dataR = fs.readFileSync(tmpR);
+  const initR = await admin.post('/api/uploads', { filename: 'Старое видео.mp4', size: dataR.length, mime: 'video/mp4', title: `Старое видео ${stamp}`, visibility: 'internal' });
+  assert.equal(initR.status, 200, initR.text);
+  for (let off = 0; off < dataR.length; off += 400000) {
+    const part = dataR.subarray(off, Math.min(dataR.length, off + 400000));
+    await admin.req('PATCH', `/api/uploads/${initR.json.uploadId}`, part, { headers: { 'content-type': 'application/offset+octet-stream', 'upload-offset': String(off) } });
+  }
+  await admin.post(`/api/uploads/${initR.json.uploadId}/complete`, {});
+  let target = null;
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    target = (await admin.get(`/api/videos/${initR.json.videoId}`)).json.video;
+    if (['ready', 'failed'].includes(target.status)) break;
+  }
+  assert.equal(target.status, 'ready', 'видео для проверки правил обработано');
+  await admin.patch(`/api/videos/${target.id}`, { tags: [`t${stamp}`] });
+  const { query } = await import('../src/db.js');
+  await query(`UPDATE videos SET published_at = now() - interval '30 days' WHERE id = $1`, [target.id]);
+
+  try {
+  const prev = await admin.get(`/api/admin/retention/${rule.json.rule.id}/preview`);
+  assert.equal(prev.status, 200);
+  assert.ok(prev.json.preview.items.some((x) => x.id === target.id), 'видео попадает под правило');
+
+  // Отметка «не удалять» выводит видео из-под правила
+  assert.equal((await admin.post(`/api/admin/lifecycle/videos/${target.id}/hold`, { hold: true })).status, 200);
+  const prev2 = await admin.get(`/api/admin/retention/${rule.json.rule.id}/preview`);
+  assert.ok(!prev2.json.preview.items.some((x) => x.id === target.id), 'заблокированное видео правило не трогает');
+  assert.equal((await admin.post(`/api/admin/lifecycle/videos/${target.id}/hold`, { hold: false })).status, 200);
+
+  // Применение правила: видео уходит в архив и исчезает из каталога
+  const run = await admin.post(`/api/admin/retention/${rule.json.rule.id}/run`, {});
+  assert.equal(run.status, 200, run.text);
+  assert.ok(run.json.done >= 1, 'правило сработало');
+  const after = (await admin.get(`/api/videos/${target.id}`)).json.video;
+  assert.ok(after.archivedAt, 'видео в архиве');
+  const feed = await admin.get('/api/feed/latest?limit=50');
+  assert.ok(!feed.json.videos.some((x) => x.id === target.id), 'архивное видео не показывается в каталоге');
+  const viewer = await user.get(`/api/videos/${target.id}`);
+  assert.equal(viewer.status, 403, 'обычному сотруднику архивное видео недоступно');
+  const archived = await admin.get('/api/admin/lifecycle/videos?kind=archived');
+  assert.ok(archived.json.items.some((x) => x.id === target.id), 'видео есть в списке архива');
+  const log = await admin.get('/api/admin/retention/log');
+  assert.ok(log.json.items.some((x) => x.videoId === target.id && x.action === 'archive'), 'действие записано в журнал');
+
+  // Возврат из архива
+  assert.equal((await admin.post(`/api/admin/lifecycle/videos/${target.id}/archive`, { archived: false })).status, 200);
+  assert.ok(!(await admin.get(`/api/videos/${target.id}`)).json.video.archivedAt, 'видео вернулось');
+
+  // Пересмотр актуальности
+  const fr = await admin.post(`/api/admin/lifecycle/videos/${target.id}/freshness`, { months: 6 });
+  assert.equal(fr.status, 200, fr.text);
+  assert.ok(fr.json.freshUntil, 'срок актуальности проставлен');
+  const notMine = await user.post(`/api/admin/lifecycle/videos/${target.id}/freshness`, { months: 6 });
+  assert.equal(notMine.status, 403, 'чужую актуальность не подтвердить');
+  const foreignArchive = await user.post(`/api/admin/lifecycle/videos/${target.id}/archive`, {});
+  assert.equal(foreignArchive.status, 403, 'чужое видео в архив не убрать');
+  const { runFreshness } = await import('../src/jobs/retention.js');
+  await query(`UPDATE videos SET fresh_until = current_date - 1, fresh_asked_at = NULL WHERE id = $1`, [target.id]);
+  const asked = await runFreshness();
+  assert.ok(asked.asked >= 1, 'автору отправлено напоминание о пересмотре');
+  const stale = await admin.get('/api/admin/lifecycle/videos?kind=stale');
+  assert.ok(stale.json.items.some((x) => x.id === target.id), 'видео попало в список «требуют пересмотра»');
+  } finally {
+    // Даже если проверка упала, видео не должно остаться в архиве и мешать другим тестам
+    await admin.post(`/api/admin/lifecycle/videos/${target.id}/hold`, { hold: false }).catch(() => {});
+    await admin.post(`/api/admin/lifecycle/videos/${target.id}/archive`, { archived: false }).catch(() => {});
+    await admin.del(`/api/admin/retention/${rule.json.rule.id}`).catch(() => {});
+    await admin.del(`/api/videos/${target.id}`).catch(() => {});
+    fs.unlinkSync(tmpR);
+  }
+});
+
+test('ретрансляция эфира и перемотка назад', async () => {
+  const { targetUrl, validTarget, restreamArgs, sourceUrl } = await import('../src/jobs/restream.js');
+  assert.equal(targetUrl('rtmp://a.ru/live/', 'KEY'), 'rtmp://a.ru/live/KEY');
+  assert.equal(targetUrl('rtmp://a.ru/live', ''), 'rtmp://a.ru/live');
+  assert.ok(validTarget('https://example.com/x'), 'обычная ссылка не годится для ретрансляции');
+  assert.equal(validTarget('rtmps://vsu.okcdn.ru/input'), null);
+  const args = restreamArgs('http://127.0.0.1:8888/live/k/index.m3u8', 'rtmp://a.ru/live/k');
+  assert.ok(args.includes('-c') && args.includes('copy'), 'поток уходит без перекодирования');
+  assert.equal(args[args.length - 2], 'flv', 'RTMP отдаётся как flv');
+  assert.equal(restreamArgs('x', 'srt://a.ru:9000')[restreamArgs('x', 'srt://a.ru:9000').length - 2], 'mpegts');
+  assert.ok(sourceUrl('abc').endsWith('/live/abc/index.m3u8'));
+
+  const st = await admin.post('/api/studio/live', { title: 'Эфир с ретрансляцией', visibility: 'internal' });
+  assert.equal(st.status, 200, st.text);
+  const stream = st.json.stream;
+  const add = await admin.post(`/api/studio/live/${stream.id}/restreams`, { name: 'VK Видео', url: 'rtmps://vsu.okcdn.ru/input', streamKey: 'secret-key-123' });
+  assert.equal(add.status, 200, add.text);
+  assert.ok(!add.text.includes('secret-key-123'), 'ключ площадки не возвращается в ответе');
+  assert.ok(add.json.restream.keyHint.includes('…'), 'от ключа показывается только подсказка');
+  const wrong = await admin.post(`/api/studio/live/${stream.id}/restreams`, { name: 'Ошибка', url: 'https://example.com/live' });
+  assert.equal(wrong.status, 400, 'адрес не того протокола отклонён');
+  const off = await admin.patch(`/api/studio/live/restreams/${add.json.restream.id}`, { enabled: false });
+  assert.equal(off.json.restream.enabled, false);
+  const foreign = await user.get(`/api/studio/live/${stream.id}/restreams`);
+  assert.equal(foreign.status, 403, 'чужие площадки не видны');
+
+  // Перемотка эфира назад: состояние DVR
+  const dvr = await admin.get(`/api/live/${stream.id}/dvr`);
+  assert.equal(dvr.status, 200, dvr.text);
+  assert.equal(typeof dvr.json.windowSec, 'number');
+  const guestDvr = await guest.get(`/api/live/${stream.id}/dvr`);
+  assert.equal(guestDvr.status, 401, 'гостю внутренняя трансляция закрыта');
+  await admin.patch(`/api/studio/live/${stream.id}`, { dvr: false });
+  const offDvr = await admin.get(`/api/live/${stream.id}/dvr`);
+  assert.equal(offDvr.json.enabled, false, 'перемотку можно выключить у трансляции');
+  const play = await admin.get(`/api/live/${stream.id}/dvr/play?back=30`);
+  assert.equal(play.status, 403, 'при выключенной перемотке запись не отдаётся');
+  assert.equal((await admin.del(`/api/studio/live/restreams/${add.json.restream.id}`)).status, 200);
+  assert.equal((await admin.del(`/api/studio/live/${stream.id}`)).status, 200);
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);

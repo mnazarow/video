@@ -18,6 +18,8 @@ import ShareLinks from '../../components/studio/ShareLinks.vue';
 import AiAssistant from '../../components/studio/AiAssistant.vue';
 import AttachmentsEditor from '../../components/studio/AttachmentsEditor.vue';
 import VideoEditor from '../../components/studio/VideoEditor.vue';
+import BlurEditor from '../../components/studio/BlurEditor.vue';
+import TextEditor from '../../components/studio/TextEditor.vue';
 import CardsEditor from '../../components/studio/CardsEditor.vue';
 import AssignDialog from '../../components/AssignDialog.vue';
 import { ChunkedUpload } from '../../utils/upload.js';
@@ -35,19 +37,34 @@ const saving = ref(false);
 const dirty = ref(false);
 const player = ref(null);
 const tab = computed(() => route.params.tab || 'details');
-const TABS = [['details', 'Сведения', 'edit'], ['thumbnail', 'Миниатюра', 'image'], ['chapters', 'Главы', 'listStatus'], ['subtitles', 'Субтитры', 'subtitles'], ['editor', 'Редактор', 'scissors'], ['cards', 'Подсказки', 'cards'], ['attachments', 'Материалы', 'inventory'], ['quiz', 'Тест', 'quizOutline'], ['scenario', 'Тренажёр', 'dots'], ['access', 'Доступ', 'lock'], ['analytics', 'Аналитика', 'analytics']];
+const TABS = [['details', 'Сведения', 'edit'], ['thumbnail', 'Миниатюра', 'image'], ['chapters', 'Главы', 'listStatus'], ['subtitles', 'Субтитры', 'subtitles'], ['editor', 'Редактор', 'scissors'], ['blur', 'Размытие', 'eyeOff'], ['text', 'Монтаж по тексту', 'transcript'], ['cards', 'Подсказки', 'cards'], ['attachments', 'Материалы', 'inventory'], ['quiz', 'Тест', 'quizOutline'], ['scenario', 'Тренажёр', 'dots'], ['access', 'Доступ', 'lock'], ['analytics', 'Аналитика', 'analytics']];
 const SOURCES = { home: 'Главная', search: 'Поиск', subscriptions: 'Подписки', channel: 'Канал', playlist: 'Плейлист', related: 'Похожие', direct: 'Прямая ссылка', embed: 'Встраивание', notification: 'Уведомление', trending: 'Тренды', library: 'Библиотека', external: 'Внешние сайты', share: 'Поделиться' };
 const DEVICES = { desktop: 'Компьютер', mobile: 'Телефон', tablet: 'Планшет', tv: 'ТВ' };
 let off = [];
 // Пока форма заполняется данными с сервера, отметку «есть изменения» не ставим
 let formFilling = false;
 
+const freshOverdue = computed(() => video.value?.freshUntil && new Date(video.value.freshUntil) < new Date() && !video.value.archivedAt);
+async function unarchive() {
+  try { await post(`/api/admin/lifecycle/videos/${video.value.id}/archive`, { archived: false }); ui.toast('Видео возвращено из архива', { type: 'success' }); await load(); }
+  catch (e) { ui.toast(e.message, { type: 'error' }); }
+}
+async function archiveVideo() {
+  if (!(await ui.ask({ title: 'Убрать видео в архив?', message: 'Видео исчезнет из каталога, поиска и подборок, но останется у вас в студии и вернётся одной кнопкой.', okLabel: 'В архив' }))) return;
+  try { await post(`/api/admin/lifecycle/videos/${video.value.id}/archive`, { reason: 'Убрано автором' }); ui.toast('Видео в архиве', { type: 'success' }); await load(); }
+  catch (e) { ui.toast(e.message, { type: 'error' }); }
+}
+async function confirmFresh(months) {
+  try { const r = await post(`/api/admin/lifecycle/videos/${video.value.id}/freshness`, { months }); ui.toast(`Актуально до ${r.freshUntil}`, { type: 'success' }); await load(); }
+  catch (e) { ui.toast(e.message, { type: 'error' }); }
+}
+
 async function load() {
   try {
     video.value = (await get(`/api/videos/${route.params.id}`)).video;
     formFilling = true;
     const v = video.value;
-    form.value = { title: v.title, description: v.description, categoryId: v.categoryId || '', tags: (v.tags || []).join(', '), visibility: v.visibility, commentsMode: v.commentsMode, allowDownload: v.allowDownload, allowEmbed: v.allowEmbed, allowRatings: v.allowRatings, scheduledAt: toLocalInput(v.scheduledAt), language: v.language || 'ru', viewerWatermark: !!v.viewerWatermark, expiresAt: toLocalInput(v.expiresAt), introEnd: v.introEnd ?? null, outroStart: v.outroStart ?? null, premiere: !!v.premiere, premiereChat: v.premiereChat !== false };
+    form.value = { title: v.title, description: v.description, categoryId: v.categoryId || '', tags: (v.tags || []).join(', '), visibility: v.visibility, commentsMode: v.commentsMode, allowDownload: v.allowDownload, allowEmbed: v.allowEmbed, allowRatings: v.allowRatings, scheduledAt: toLocalInput(v.scheduledAt), language: v.language || 'ru', viewerWatermark: !!v.viewerWatermark, expiresAt: toLocalInput(v.expiresAt), introEnd: v.introEnd ?? null, outroStart: v.outroStart ?? null, premiere: !!v.premiere, premiereChat: v.premiereChat !== false, freshUntil: v.freshUntil ? String(v.freshUntil).slice(0, 10) : '' };
     chapters.value = (v.chapters || []).map((c) => ({ ...c }));
     accessUsers.value = v.accessUsers || [];
     accessGroups.value = v.accessGroups || [];
@@ -236,7 +253,7 @@ async function removeTrack(t) {
         <div class="code-box mt-8"><span>{{ shareUrl }}</span><button class="ibtn sm" @click="copy(shareUrl)"><Icon name="copy" :size="16" /></button></div>
         <div class="small muted mt-8">{{ video.originalFilename }} • {{ fmtBytes(video.originalSize) }} • {{ video.width }}×{{ video.height }} • {{ fmtDuration(video.duration) }}<br>Хранилище: {{ fmtBytes(video.storageBytes) }}<span v-if="video.renditions?.length"> • {{ video.renditions.map((r) => r.label).join(', ') }}</span></div>
         <div v-if="replacing" class="mt-8"><div class="up-bar"><i :style="{ width: (replacing.progress * 100) + '%' }" :class="{ err: replacing.status === 'error' }"></i></div><div class="tiny muted mt-4">{{ replacing.status === 'error' ? 'Ошибка: ' + replacing.error : replacing.status === 'done' ? 'Загружено' : `Загрузка нового файла ${Math.round(replacing.progress * 100)}%` }}</div></div>
-        <div class="row wrap mt-8"><router-link :to="`/watch/${video.shortId}`" class="btn sm"><Icon name="play" :size="16" /> Открыть</router-link><button v-if="auth.canAssign && video.status === 'ready'" class="btn sm" @click="assignOpen = true"><Icon name="assignment" :size="16" /> Назначить к просмотру</button><label v-if="['ready', 'failed'].includes(video.status) && !replacing" class="btn ghost sm" title="Загрузить новый файл вместо текущего"><Icon name="swap" :size="16" /> Заменить файл<input type="file" class="hidden" :accept="(auth.config?.uploadAllowedExtensions || []).map((e) => '.' + e).join(',')" @change="replaceFile" /></label><button v-if="video.originalKept" class="btn ghost sm" @click="reprocess"><Icon name="refresh" :size="16" /> Обработать заново</button><button v-if="auth.config?.ragEnabled && video.status === 'ready'" class="btn ghost sm" title="Отправить документ видео в базу знаний (RAG)" @click="pushRag"><Icon name="database" :size="16" /> В базу знаний</button><button v-if="video.originalKept && video.status === 'ready'" class="btn ghost sm" @click="dropOriginal">Удалить оригинал</button><button class="btn ghost sm danger" @click="remove"><Icon name="delete" :size="16" /> Удалить</button></div>
+        <div class="row wrap mt-8"><router-link :to="`/watch/${video.shortId}`" class="btn sm"><Icon name="play" :size="16" /> Открыть</router-link><button v-if="auth.canAssign && video.status === 'ready'" class="btn sm" @click="assignOpen = true"><Icon name="assignment" :size="16" /> Назначить к просмотру</button><label v-if="['ready', 'failed'].includes(video.status) && !replacing" class="btn ghost sm" title="Загрузить новый файл вместо текущего"><Icon name="swap" :size="16" /> Заменить файл<input type="file" class="hidden" :accept="(auth.config?.uploadAllowedExtensions || []).map((e) => '.' + e).join(',')" @change="replaceFile" /></label><button v-if="video.originalKept" class="btn ghost sm" @click="reprocess"><Icon name="refresh" :size="16" /> Обработать заново</button><button v-if="auth.config?.ragEnabled && video.status === 'ready'" class="btn ghost sm" title="Отправить документ видео в базу знаний (RAG)" @click="pushRag"><Icon name="database" :size="16" /> В базу знаний</button><button v-if="video.originalKept && video.status === 'ready'" class="btn ghost sm" @click="dropOriginal">Удалить оригинал</button><button v-if="!video.archivedAt && auth.config?.lifecycleEnabled !== false" class="btn ghost sm" title="Убрать из каталога, сохранив видео" @click="archiveVideo"><Icon name="database" :size="16" /> В архив</button><button class="btn ghost sm danger" @click="remove"><Icon name="delete" :size="16" /> Удалить</button></div>
       </div>
       <div class="grow" style="min-width: 0">
         <h1 style="font-family: var(--font-body); text-transform: none; font-size: 24px; letter-spacing: 0" class="clamp-2">{{ video.title }}</h1>
@@ -254,6 +271,9 @@ async function removeTrack(t) {
           <a v-if="video.sourceUrl" class="badge" :href="video.sourceUrl" target="_blank" rel="noopener" title="Импортировано по ссылке"><Icon name="importUrl" :size="12" /> Импорт</a>
           <span v-if="video.expiresAt && !video.expiredAt" class="badge warning" :title="'Срок публикации до ' + fmtDateTime(video.expiresAt)"><Icon name="clock" :size="12" /> до {{ fmtDateShort(video.expiresAt) }}</span>
           <span v-if="video.expiredAt" class="badge danger">Срок публикации истёк</span>
+          <span v-if="video.archivedAt" class="badge warning"><Icon name="database" :size="12" /> В архиве</span>
+          <span v-if="video.legalHold" class="badge"><Icon name="gavel" :size="12" /> Не удалять</span>
+          <span v-if="video.freshUntil" class="badge" :class="freshOverdue ? 'danger' : ''" :title="'Актуально до ' + fmtDateShort(video.freshUntil)"><Icon name="clock" :size="12" /> актуально до {{ fmtDateShort(video.freshUntil) }}</span>
           <span v-if="auth.config?.ragEnabled && video.ragSyncedAt" class="badge" :title="'Выгружено в базу знаний ' + fmtDateTime(video.ragSyncedAt)"><Icon name="database" :size="12" /> RAG</span>
         </div>
         <div class="stat-tiles mt-16">
@@ -265,6 +285,9 @@ async function removeTrack(t) {
       </div>
     </div>
 
+    <div v-if="video.archivedAt" class="alert warning mb-16"><Icon name="database" :size="20" /><span class="grow">Видео в архиве{{ video.archivedReason ? ` — ${video.archivedReason}` : '' }}: оно не показывается в каталоге и поиске, но доступно вам и администратору.</span><button class="btn sm" @click="unarchive">Вернуть из архива</button></div>
+    <div v-else-if="video.legalHold" class="alert mb-16"><Icon name="gavel" :size="20" /><span class="grow">На видео стоит отметка «не удалять»: правила хранения его не тронут. Снять отметку может администратор.</span></div>
+    <div v-else-if="freshOverdue" class="alert warning mb-16"><Icon name="clock" :size="20" /><span class="grow">Срок актуальности истёк {{ fmtDateShort(video.freshUntil) }} — подтвердите, что материал не устарел.</span><button class="btn sm" @click="confirmFresh(12)">Актуально ещё год</button></div>
     <div class="tabs studio-tabs mt-24 mb-24">
       <router-link v-for="[k, l, ic] in TABS" :key="k" :to="`/studio/videos/${video.id}/${k}`" class="tab" :class="{ active: tab === k }"><Icon :name="ic" :size="16" style="vertical-align:-3px; margin-right:6px" />{{ l }}</router-link>
     </div>
@@ -286,6 +309,7 @@ async function removeTrack(t) {
           <label v-if="form.premiere" class="switch mt-8"><input type="checkbox" v-model="form.premiereChat" /><span></span> Чат премьеры</label>
         </div>
         <div class="field"><label>Срок публикации</label><input class="input" type="datetime-local" v-model="form.expiresAt" /><div class="hint">После этой даты видео станет приватным (ссылка и статистика сохранятся)<span v-if="video.expiredAt"> · срок истёк {{ fmtDateTime(video.expiredAt) }}</span></div></div>
+        <div class="field" v-if="auth.config?.lifecycleEnabled !== false"><label>Актуально до</label><input class="input" type="date" v-model="form.freshUntil" /><div class="hint">Портал напомнит вам пересмотреть материал<span v-if="video.freshConfirmedAt"> · подтверждено {{ fmtDateShort(video.freshConfirmedAt) }}</span></div></div>
         <div class="field"><label>Комментарии</label><select class="select" v-model="form.commentsMode"><option value="open">Разрешены</option><option value="held">Публиковать после проверки</option><option value="disabled">Отключены</option></select></div>
         <div class="field"><label>Конец вступления, с</label><input class="input" type="number" min="0" step="0.5" v-model.number="form.introEnd" placeholder="например 12" /></div>
         <div class="field"><label>Начало финальной заставки, с</label><input class="input" type="number" min="0" step="0.5" v-model.number="form.outroStart" placeholder="например 540" /></div>
@@ -303,6 +327,16 @@ async function removeTrack(t) {
     <!-- Редактор -->
     <div v-else-if="tab === 'editor'">
       <VideoEditor :video="video" :player="player" @changed="load" />
+    </div>
+
+    <!-- Размытие лиц и областей (1.9) -->
+    <div v-else-if="tab === 'blur'">
+      <BlurEditor :video="video" :player="player" @changed="load" />
+    </div>
+
+    <!-- Монтаж по расшифровке (1.9) -->
+    <div v-else-if="tab === 'text'">
+      <TextEditor :video="video" :player="player" @changed="load" />
     </div>
 
     <!-- Подсказки и конечная заставка -->

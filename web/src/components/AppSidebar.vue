@@ -10,10 +10,12 @@ const auth = useAuth();
 const ui = useUi();
 const subs = ref([]);
 const categories = ref([]);
+const showcases = ref([]);   // витрины, закреплённые в меню (1.9)
 const showAllSubs = ref(false);
 
 async function load() {
   try { categories.value = (await get('/api/feed/categories')).categories; } catch { /* ignore */ }
+  try { showcases.value = (await get('/api/showcases?menu')).showcases; } catch { showcases.value = []; }
   if (auth.isActive) {
     try { subs.value = (await get('/api/me/subscriptions')).channels; } catch { subs.value = []; }
   } else subs.value = [];
@@ -72,6 +74,10 @@ const library = [
           <router-link v-if="auth.canAssign" to="/studio/assignments" class="sb-item"><Icon name="clipboardList" /><span>Обязательные просмотры</span></router-link>
         </div>
       </template>
+      <div class="sb-group" v-if="showcases.length">
+        <div class="sb-title">Подборки</div>
+        <router-link v-for="s in showcases" :key="s.id" :to="`/hub/${s.slug}`" class="sb-item"><Icon name="apps" /><span>{{ s.title }}</span></router-link>
+      </div>
       <div class="sb-group" v-if="categories.length">
         <div class="sb-title">Категории</div>
         <router-link v-for="c in categories" :key="c.id" :to="`/category/${c.slug}`" class="sb-item"><Icon :name="c.icon" /><span>{{ c.name }}</span></router-link>

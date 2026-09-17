@@ -14,6 +14,7 @@ import { sendReminders } from '../lib/assignments.js';
 import { sendLiveReminders } from '../routes/live-interact.js';
 import { emitEvent, eventVideo } from '../lib/events.js';
 import { scanWatchFolder, sendDigests } from './platform.js';
+import { runRetention } from './retention.js';
 
 export async function runEmail(job) {
   const { to, subject, html, text } = job.payload;
@@ -189,6 +190,10 @@ async function maintenanceBody(job, ctx) {
         } catch (e) { ctx?.log?.warn({ err: e.message, videoId: v.id }, 'originals cleanup'); }
       }
       out.originalsRemoved = old.length;
+    }
+    // 1.9: правила хранения, архив и пересмотр актуальности — раз в сутки
+    if (s['lifecycle.enabled']) {
+      try { out.retention = await runRetention({ payload: {} }); } catch (e) { ctx?.log?.warn({ err: e.message }, 'retention'); }
     }
     await query(`DELETE FROM search_history WHERE created_at < now() - interval '180 days'`);
     // Корзина: окончательно удаляем видео, стёртые давнее retention.trash_days (файлы и записи)

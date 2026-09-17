@@ -35,6 +35,21 @@ export const mediamtx = {
     } catch { /* ignore */ }
     return n;
   },
+  /** Записанные отрезки пути (сервер воспроизведения MediaMTX) — для перемотки эфира назад. */
+  playbackList: async (name) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const res = await fetch(`${config.mediamtx.playbackUrl.replace(/\/$/, '')}/list?path=${encodeURIComponent(name)}`, { signal: ctrl.signal });
+      if (!res.ok) return [];
+      const items = await res.json();
+      return Array.isArray(items) ? items.map((x) => ({ start: x.start, duration: Number(x.duration) || 0 })) : [];
+    } catch { return []; } finally { clearTimeout(timer); }
+  },
+  /** Адрес воспроизведения записи с указанного момента. */
+  playbackUrl: (name, startIso, duration, format = 'mp4') =>
+    `${config.mediamtx.playbackUrl.replace(/\/$/, '')}/get?path=${encodeURIComponent(name)}&start=${encodeURIComponent(startIso)}&duration=${encodeURIComponent(String(duration))}&format=${format}`,
+
   /** Отключить издателя (завершить эфир принудительно). */
   kick: async (name) => {
     const p = await api('GET', `/v3/paths/get/${encodeURIComponent(name)}`).catch(() => null);

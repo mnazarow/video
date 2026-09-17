@@ -360,6 +360,13 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             <div class="field"><label>Видимость по умолчанию</label><select class="select" v-model="s['live.default_visibility']"><option value="internal">Для сотрудников</option><option value="public">Публичная</option><option value="unlisted">По ссылке</option><option value="private">Приватная</option></select></div>
             <div class="field"><label>Медленный режим чата, с (0 — выкл.)</label><input class="input" type="number" min="0" v-model.number="s['live.chat_slow_mode_sec']" /></div>
           </div>
+          <div class="divider"></div>
+          <h4 class="mb-4">Ретрансляция и перемотка эфира (1.9)</h4>
+          <p class="small muted">Ретрансляция отдаёт копию эфира на внешние площадки (VK Видео, YouTube, Rutube, свой RTMP) — адреса и ключи автор задаёт у своей трансляции. Перемотка позволяет зрителю отмотать идущий эфир назад или включить его с начала; нужна включённая запись.</p>
+          <div class="col gap-12"><label class="switch"><input type="checkbox" v-model="s['live.restream_enabled']" /><span class="track"></span><span>Ретрансляция на внешние площадки</span></label><label class="switch"><input type="checkbox" v-model="s['live.dvr']" /><span class="track"></span><span>Перемотка эфира назад</span></label></div>
+          <div class="form-grid mt-16">
+            <div class="field"><label>Глубина перемотки, минут</label><input class="input" type="number" min="5" max="1440" v-model.number="s['live.dvr_minutes']" /></div>
+          </div>
           <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('live.'))">Сохранить</button></div>
         </div>
 
@@ -478,6 +485,18 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
               <div class="field"><label>Минимальная пауза, с</label><input class="input" type="number" min="0.3" max="30" step="0.1" v-model.number="s['editor.silence_min_sec']" /></div>
               <div class="field"><label>Отступ по краям паузы, с</label><input class="input" type="number" min="0" max="5" step="0.1" v-model.number="s['editor.silence_keep_sec']" /></div>
             </div>
+            <div class="divider"></div>
+            <h4 class="mb-4">Размытие в кадре и монтаж по тексту (1.9)</h4>
+            <p class="small muted">Размытие закрывает лица и документы прямо в записи: автор обводит область на кадре и задаёт отрезок времени. Автопоиск лиц требует пакета <span class="mono">python3-opencv</span> на сервере. Монтаж по расшифровке даёт вырезать фразы из текста и одной кнопкой убирать слова-паразиты.</p>
+            <div class="col gap-12 mb-16">
+              <label class="switch"><input type="checkbox" v-model="s['editor.blur_enabled']" /><span class="track"></span><span>Размытие лиц и областей</span></label>
+              <label class="switch"><input type="checkbox" v-model="s['editor.faces_enabled']" /><span class="track"></span><span>Автоматический поиск лиц</span></label>
+              <label class="switch"><input type="checkbox" v-model="s['editor.text_edit']" /><span class="track"></span><span>Монтаж по расшифровке и слова-паразиты</span></label>
+            </div>
+            <div class="form-grid">
+              <div class="field"><label>Сила размытия по умолчанию</label><input class="input" type="number" min="4" max="60" v-model.number="s['editor.blur_strength']" /></div>
+              <div class="field" style="grid-column: 1 / -1"><label>Слова-паразиты (через запятую)</label><input class="input" :value="(s['editor.filler_words'] || []).join(', ')" @change="s['editor.filler_words'] = $event.target.value.split(',').map((x) => x.trim()).filter(Boolean)" /><div class="hint">Портал ищет эти слова в расшифровке и предлагает вырезать их из записи</div></div>
+            </div>
             <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('editor.'))">Сохранить</button></div>
           </div>
           <div class="panel"><h3 class="mb-8"><Icon name="ocr" :size="20" style="vertical-align:-4px" /> Текст на экране (OCR)</h3>
@@ -537,6 +556,20 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
               <div class="field"><label>Удалять исходники старше, дней (0 — хранить всегда)</label><input class="input" type="number" min="0" max="3650" v-model.number="s['storage.originals_days']" /></div>
             </div>
             <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('storage.'))">Сохранить</button><router-link class="btn" to="/admin/storage">Открыть «Хранилище»</router-link></div>
+          </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="clock" :size="20" style="vertical-align:-4px" /> Сроки хранения и актуальность (1.9)</h3>
+            <p class="small muted">Правила хранения сами убирают в архив или в корзину материалы старше срока и предупреждают автора заранее. Видео с отметкой «не удалять» правила не трогают. Пересмотр актуальности напоминает автору подтвердить, что материал ещё не устарел. Сами правила — в разделе «Хранение».</p>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['lifecycle.enabled']" /><span class="track"></span><span>Правила хранения и пересмотр актуальности включены</span></label>
+            <div class="form-grid">
+              <div class="field"><label>Срок актуальности по умолчанию, месяцев (0 — не заполнять)</label><input class="input" type="number" min="0" max="120" v-model.number="s['lifecycle.freshness_months']" /></div>
+              <div class="field"><label>Напомнить о пересмотре за, дней</label><input class="input" type="number" min="0" max="180" v-model.number="s['lifecycle.freshness_remind_days']" /></div>
+            </div>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('lifecycle.'))">Сохранить</button><router-link class="btn" to="/admin/lifecycle">Открыть «Хранение»</router-link></div>
+          </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="apps" :size="20" style="vertical-align:-4px" /> Витрины (1.9)</h3>
+            <p class="small muted">Тематические страницы-подборки со своим адресом вида <span class="mono">/hub/адрес</span>: обложка, описание и разделы с видео. Их можно закрепить в меню портала.</p>
+            <label class="switch"><input type="checkbox" v-model="s['showcases.enabled']" /><span class="track"></span><span>Витрины включены</span></label>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save(prefix('showcases.'))">Сохранить</button><router-link class="btn" to="/admin/showcases">Открыть «Витрины»</router-link></div>
           </div>
           <div class="panel"><h3 class="mb-8">Хранение данных</h3>
           <div class="form-grid">

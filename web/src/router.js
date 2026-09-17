@@ -21,6 +21,8 @@ export const router = createRouter({
     { path: '/live', name: 'live', component: v('LiveListView') },
     { path: '/live/:id', name: 'live-watch', component: v('LiveWatchView') },
     { path: '/category/:slug', name: 'category', component: v('CategoryView') },
+    // 1.9: витрина-подборка со своим адресом
+    { path: '/hub/:slug', name: 'showcase', component: v('ShowcaseView') },
     { path: '/tag/:tag', name: 'tag', component: v('TagView') },
     { path: '/watch/:id', name: 'watch', component: v('WatchView') },
     { path: '/search', name: 'search', component: v('SearchView') },
@@ -92,6 +94,8 @@ export const router = createRouter({
         { path: 'quality', name: 'admin-quality', component: v('admin/AdminQuality') },
         { path: 'screens', name: 'admin-screens', component: v('admin/AdminScreens') },
         { path: 'storage', name: 'admin-storage', component: v('admin/AdminStorage') },
+        { path: 'showcases', name: 'admin-showcases', component: v('admin/AdminShowcases'), meta: { admin: true } },
+        { path: 'lifecycle', name: 'admin-lifecycle', component: v('admin/AdminLifecycle') },
         { path: 'settings/:tab?', name: 'admin-settings', component: v('admin/AdminSettings'), meta: { admin: true } },
         { path: 'jobs', name: 'admin-jobs', component: v('admin/AdminJobs') },
         { path: 'audit', name: 'admin-audit', component: v('admin/AdminAudit') },

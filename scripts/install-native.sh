@@ -120,6 +120,10 @@ install_native() {
   if ! (DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng >>"$CV_LOG" 2>&1); then
     warn "tesseract не установлен — распознавание текста на экране (OCR) будет недоступно"
   fi
+  # python3-opencv (автопоиск лиц для размытия, версия 1.9) — необязательный
+  if ! (DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-opencv >>"$CV_LOG" 2>&1); then
+    warn "python3-opencv не установлен — автопоиск лиц недоступен, области размытия задаются вручную"
+  fi
   ensure_node
   ok "nginx $(nginx -v 2>&1 | grep -oE '[0-9.]+' | head -1), PostgreSQL $(psql --version | grep -oE '[0-9]+' | head -1), ffmpeg $(ffmpeg -version 2>/dev/null | head -1 | awk '{print $3}')"
 
@@ -172,6 +176,7 @@ NGINX_ACCEL=1
 MEDIAMTX_VERSION=$CV_MEDIAMTX_VERSION
 MEDIAMTX_API_URL=http://127.0.0.1:9997
 MEDIAMTX_HLS_URL=http://127.0.0.1:8888
+MEDIAMTX_PLAYBACK_URL=http://127.0.0.1:9996
 MEDIAMTX_HOOK_SECRET=$(random_secret 32)
 LIVE_RTMP_URL=rtmp://$CV_DOMAIN:1935
 LIVE_SRT_URL=srt://$CV_DOMAIN:8890

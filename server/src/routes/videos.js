@@ -276,6 +276,14 @@ export default async function videoRoutes(app) {
       add('premiere', wants);
     }
     if (b.premiereChat !== undefined) add('premiere_chat', !!b.premiereChat);
+    // «Актуально до» — пересмотр актуальности материала (1.9)
+    if (b.freshUntil !== undefined) {
+      const d = b.freshUntil ? new Date(b.freshUntil) : null;
+      if (d && Number.isNaN(d.getTime())) throw badRequest('Некорректная дата актуальности');
+      add('fresh_until', d ? d.toISOString().slice(0, 10) : null);
+      add('fresh_confirmed_at', d ? new Date() : null);
+      add('fresh_asked_at', null);
+    }
     if (b.chapters !== undefined) {
       let ch = [];
       if (Array.isArray(b.chapters)) ch = b.chapters.map((c) => ({ start: Math.max(0, Number(c.start) || 0), title: String(c.title || '').trim().slice(0, 100) })).filter((c) => c.title).sort((a, c) => a.start - c.start).slice(0, 200);

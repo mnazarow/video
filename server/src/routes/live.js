@@ -16,6 +16,7 @@ import { runFfmpeg } from '../lib/ffmpeg.js';
 import { audit } from '../lib/audit.js';
 import { emitEvent } from '../lib/events.js';
 import { loadSettings } from '../lib/settings.js';
+import { startRestreams, targetUrl, validTarget } from '../jobs/restream.js';
 
 const LIVE_SELECT = `s.*, u.display_name AS owner_name, u.handle AS owner_handle, u.avatar_path AS owner_avatar, u.subscriber_count AS owner_subscribers, rv.short_id AS recording_short_id`;
 const LIVE_FROM = `live_streams s JOIN users u ON u.id = s.owner_id LEFT JOIN videos rv ON rv.id = s.recording_video_id`;
@@ -194,6 +195,7 @@ export default async function liveRoutes(app) {
     if (b.categoryId !== undefined) add('category_id', b.categoryId ? Number(b.categoryId) : null);
     if (b.chatEnabled !== undefined) add('chat_enabled', !!b.chatEnabled);
     if (b.record !== undefined) add('record', !!b.record);
+    if (b.dvr !== undefined) add('dvr', !!b.dvr);   // перемотка эфира назад (1.9)
     if (b.scheduledAt !== undefined) { const d = b.scheduledAt ? new Date(b.scheduledAt) : null; add('scheduled_at', d && !Number.isNaN(d.getTime()) ? d : null); }
     // Вебинар: регистрация участников (1.5)
     if (b.registration !== undefined) add('registration', !!b.registration);
@@ -244,6 +246,119 @@ export default async function liveRoutes(app) {
     return { ok: true };
   });
 
+  // --- Перемотка эфира назад и просмотр с начала (DVR, 1.9) -----------------------------
+  // Глубина перемотки ограничена настройкой; запись отдаёт сервер воспроизведения MediaMTX.
+  app.get('/live/:id/dvr', async (req) => {
+    const s = await loadStream(req.params.id);
+    if (!s) throw notFound('Трансляция не найдена');
+    if (!canViewLive(s, req.user)) throw req.user ? forbidden() : unauthorized();
+    const settings = req.settings || await loadSettings();
+    const windowSec = Math.max(60, Number(settings['live.dvr_minutes']) || 120) * 60;
+    if (!settings['live.dvr'] || s.dvr === false || !s.record) return { enabled: false, available: 0, windowSec };
+    const items = await mediamtx.playbackList(`live/${s.stream_key}`);
+    const startedAt = s.started_at ? new Date(s.started_at).getTime() : null;
+    let from = null, until = null;
+    for (const it of items) {
+      const st = new Date(it.start).getTime();
+      if (Number.isNaN(st)) continue;
+      const en = st + (it.duration || 0) * 1000;
+      if (startedAt && en < startedAt - 60000) continue;      // запись прошлого эфира
+      from = from == null ? st : Math.min(from, st);
+      until = until == null ? en : Math.max(until, en);
+    }
+    if (from == null) return { enabled: true, available: 0, windowSec, startedAt: s.started_at };
+    const begin = Math.max(from, startedAt ? startedAt - 5000 : from, Date.now() - windowSec * 1000);
+    const available = Math.max(0, Math.round((Math.min(until, Date.now()) - begin) / 1000));
+    return { enabled: true, available, windowSec, startedAt: s.started_at, beginAt: new Date(begin).toISOString(), offsetSec: Math.max(0, Math.round((begin - (startedAt || begin)) / 1000)) };
+  });
+
+  // Воспроизведение записи идущего эфира: from — секунды от начала эфира, back — на сколько отмотать от «сейчас»
+  app.get('/live/:id/dvr/play', async (req, reply) => {
+    const s = await loadStream(req.params.id);
+    if (!s) throw notFound();
+    if (!canViewLive(s, req.user)) throw req.user ? forbidden() : unauthorized();
+    const settings = req.settings || await loadSettings();
+    if (!settings['live.dvr'] || s.dvr === false) throw forbidden('Перемотка эфира отключена');
+    const windowSec = Math.max(60, Number(settings['live.dvr_minutes']) || 120) * 60;
+    const startedAt = s.started_at ? new Date(s.started_at).getTime() : Date.now();
+    const back = Number(req.query.back);
+    let at = Number.isFinite(back) && back > 0 ? Date.now() - Math.min(back, windowSec) * 1000 : startedAt + Math.max(0, Number(req.query.from) || 0) * 1000;
+    at = Math.max(at, Date.now() - windowSec * 1000, startedAt - 5000);
+    const duration = Math.max(10, Math.min(4 * 3600, Number(req.query.duration) || Math.round((Date.now() - at) / 1000) + 30));
+    const target = mediamtx.playbackUrl(`live/${s.stream_key}`, new Date(at).toISOString(), duration, 'mp4');
+    let res;
+    try { res = await fetch(target, { headers: { 'user-agent': 'corpvideo-proxy' } }); }
+    catch { reply.code(503); return { error: 'Запись эфира недоступна' }; }
+    reply.code(res.status === 200 ? 200 : res.status);
+    reply.header('content-type', res.headers.get('content-type') || 'video/mp4');
+    reply.header('cache-control', 'no-store');
+    if (!res.ok) return '';
+    return reply.send(res.body);
+  });
+
+  // --- Ретрансляция на внешние площадки (1.9) --------------------------------------------
+  async function ownStream(req) {
+    const s = await loadStream(req.params.id);
+    if (!s) throw notFound('Трансляция не найдена');
+    if (s.owner_id !== req.user.id && !isStaff(req.user)) throw forbidden();
+    return s;
+  }
+  const restreamOut = (r) => ({
+    id: r.id, name: r.name, url: r.url, keyHint: r.stream_key ? `${String(r.stream_key).slice(0, 3)}…${String(r.stream_key).slice(-2)}` : '',
+    enabled: r.enabled, status: r.status, lastError: r.last_error, startedAt: r.started_at, stoppedAt: r.stopped_at,
+  });
+
+  app.get('/studio/live/:id/restreams', { preHandler: app.requireActive }, async (req) => {
+    const s = await ownStream(req);
+    const rows = await many('SELECT * FROM live_restreams WHERE stream_id = $1 ORDER BY created_at', [s.id]);
+    return { enabled: !!req.settings['live.restream_enabled'], restreams: rows.map(restreamOut) };
+  });
+
+  app.post('/studio/live/:id/restreams', { preHandler: app.requireActive }, async (req) => {
+    const s = await ownStream(req);
+    if (!req.settings['live.restream_enabled']) throw forbidden('Ретрансляция отключена администратором');
+    const b = req.body || {};
+    const name = String(b.name || '').trim().slice(0, 80);
+    const url = String(b.url || '').trim().slice(0, 500);
+    if (!name) throw badRequest('Укажите название площадки');
+    const bad = validTarget(url);
+    if (bad) throw badRequest(bad);
+    const n = await one('SELECT count(*)::int AS n FROM live_restreams WHERE stream_id = $1', [s.id]);
+    if ((n?.n || 0) >= 8) throw badRequest('Больше восьми площадок на одну трансляцию не поддерживается');
+    const row = await one('INSERT INTO live_restreams(stream_id, name, url, stream_key) VALUES ($1,$2,$3,$4) RETURNING *',
+      [s.id, name, url, String(b.streamKey || '').trim().slice(0, 300)]);
+    await audit(req, 'live.restream.add', { targetType: 'live', targetId: s.id, details: { name, url } });
+    if (s.status === 'live' && row.enabled) await enqueue('restream', { restreamId: row.id }, { dedupe: true, maxAttempts: 1, priority: 1 });
+    return { restream: restreamOut(row) };
+  });
+
+  app.patch('/studio/live/restreams/:rid', { preHandler: app.requireActive }, async (req) => {
+    const r = await one('SELECT * FROM live_restreams WHERE id = $1', [req.params.rid]);
+    if (!r) throw notFound('Площадка не найдена');
+    const s = await loadStream(r.stream_id);
+    if (s.owner_id !== req.user.id && !isStaff(req.user)) throw forbidden();
+    const b = req.body || {};
+    const sets = []; const params = [r.id];
+    const add = (c, v) => { params.push(v); sets.push(`${c} = $${params.length}`); };
+    if (b.name !== undefined) add('name', String(b.name).trim().slice(0, 80) || r.name);
+    if (b.url !== undefined) { const bad = validTarget(String(b.url).trim()); if (bad) throw badRequest(bad); add('url', String(b.url).trim().slice(0, 500)); }
+    if (b.streamKey !== undefined) add('stream_key', String(b.streamKey).trim().slice(0, 300));
+    if (b.enabled !== undefined) { add('enabled', !!b.enabled); if (!b.enabled) add('status', 'stopped'); }
+    if (sets.length) await query(`UPDATE live_restreams SET ${sets.join(', ')} WHERE id = $1`, params);
+    const upd = await one('SELECT * FROM live_restreams WHERE id = $1', [r.id]);
+    if (upd.enabled && s.status === 'live' && req.settings['live.restream_enabled']) await enqueue('restream', { restreamId: upd.id }, { dedupe: true, maxAttempts: 1, priority: 1 });
+    return { restream: restreamOut(upd) };
+  });
+
+  app.delete('/studio/live/restreams/:rid', { preHandler: app.requireActive }, async (req) => {
+    const r = await one('SELECT * FROM live_restreams WHERE id = $1', [req.params.rid]);
+    if (!r) throw notFound('Площадка не найдена');
+    const s = await loadStream(r.stream_id);
+    if (s.owner_id !== req.user.id && !isStaff(req.user)) throw forbidden();
+    await query('DELETE FROM live_restreams WHERE id = $1', [r.id]);
+    return { ok: true };
+  });
+
   // --- Хук авторизации MediaMTX (authMethod: http) -------------------------------------
   app.post('/live/hooks/auth', { config: { rateLimit: false } }, async (req, reply) => {
     const secret = config.mediamtx.hookSecret;
@@ -287,6 +402,8 @@ async function startStream(s, pathInfo) {
       if (st['asr.enabled'] && st['live.captions']) await enqueue('live_captions', { streamId: s.id }, { dedupe: true, maxAttempts: 2 });
     } catch { /* субтитры не должны мешать эфиру */ }
   }
+  // Ретрансляция на внешние площадки (1.9): по заданию на каждую включённую площадку
+  try { await startRestreams(s.id, enqueue); } catch (e) { console.error('restream start failed:', e.message); }
   await publish({ type: 'live.started', streamId: s.id, shortId: s.short_id, ownerId: s.owner_id, visibility: s.visibility });
   await emitEvent('live.started', { stream: { id: s.id, shortId: s.short_id, title: s.title, ownerId: s.owner_id, visibility: s.visibility, protocol, url: `/live/${s.short_id}` } });
   await toChannel(`live:${s.id}`, { type: 'stream_status', streamId: s.id, status: 'live', stream: liveOut(full) });
@@ -306,6 +423,7 @@ async function startStream(s, pathInfo) {
 
 async function endStream(s, reason = 'source_gone') {
   await query(`UPDATE live_streams SET status = 'ended', ended_at = now(), viewer_count = 0, updated_at = now() WHERE id = $1 AND status = 'live'`, [s.id]);
+  await query(`UPDATE live_restreams SET status = 'stopped', stopped_at = now() WHERE stream_id = $1 AND status IN ('starting','live')`, [s.id]).catch(() => {});
   await publish({ type: 'live.ended', streamId: s.id, shortId: s.short_id, ownerId: s.owner_id, visibility: s.visibility });
   await emitEvent('live.ended', { stream: { id: s.id, shortId: s.short_id, title: s.title, ownerId: s.owner_id, visibility: s.visibility, reason, url: `/live/${s.short_id}` } });
   await toChannel(`live:${s.id}`, { type: 'stream_status', streamId: s.id, status: 'ended', reason });

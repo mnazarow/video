@@ -24,6 +24,8 @@ const NAV = [
   { to: '/admin/quality', label: 'Качество', icon: 'speed' },
   { to: '/admin/screens', label: 'Экраны', icon: 'tv' },
   { to: '/admin/storage', label: 'Хранилище', icon: 'harddisk' },
+  { to: '/admin/lifecycle', label: 'Хранение', icon: 'clock' },
+  { to: '/admin/showcases', label: 'Витрины', icon: 'apps', admin: true },
   { to: '/admin/categories', label: 'Категории', icon: 'folder' },
   { to: '/admin/jobs', label: 'Очередь заданий', icon: 'listStatus', badge: 'jobs' },
   { to: '/admin/settings', label: 'Настройки', icon: 'settings', admin: true },
