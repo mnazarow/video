@@ -1,6 +1,8 @@
 // Возобновляемая загрузка видео по частям: инициализация, отправка чанков с повторами, завершение.
 import { post, get, del, ApiError } from '../api.js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class ChunkedUpload {
   constructor(file, meta = {}) {
     this.file = file;
@@ -20,23 +22,46 @@ export class ChunkedUpload {
     this._abort = null;
     this._lastBytes = 0;
     this._lastTime = 0;
+    this.detail = '';
   }
 
   emit() { this.onChange(this); }
 
+  async init() {
+    const r = await post('/api/uploads', { filename: this.file.name, size: this.file.size, mime: this.file.type, ...this.meta });
+    // Без идентификатора продолжать нельзя: иначе следующий запрос уйдёт на /api/uploads/undefined
+    // и человек увидит непонятное «Загрузка не найдена» вместо настоящей причины.
+    if (!r || !UUID_RE.test(String(r.uploadId || ''))) {
+      throw new ApiError(0, 'Портал не вернул идентификатор загрузки. Проверьте связь с сервером кнопкой «Проверить загрузку» и покажите результат администратору.', r);
+    }
+    this.uploadId = r.uploadId; this.videoId = r.videoId; this.shortId = r.shortId; this.chunkSize = r.chunkSize || this.chunkSize; this.video = r.video;
+    this.offset = 0;
+  }
+
   async start() {
     try {
-      if (!this.uploadId) {
-        const r = await post('/api/uploads', { filename: this.file.name, size: this.file.size, mime: this.file.type, ...this.meta });
-        this.uploadId = r.uploadId; this.videoId = r.videoId; this.shortId = r.shortId; this.chunkSize = r.chunkSize || this.chunkSize; this.video = r.video;
-      } else {
-        const r = await get(`/api/uploads/${this.uploadId}`);
-        this.offset = r.offset;
+      if (!this.uploadId) await this.init();
+      else {
+        // Возобновление: если начатой загрузки на сервере уже нет (истекла, отменена, сервер перезапущен),
+        // начинаем заново, а не упираемся навсегда в «Загрузка не найдена».
+        try {
+          const r = await get(`/api/uploads/${this.uploadId}`);
+          this.offset = r.offset;
+        } catch (e) {
+          if (e instanceof ApiError && (e.status === 404 || e.status === 410)) { this.uploadId = null; this.offset = 0; await this.init(); }
+          else throw e;
+        }
       }
       this.status = 'uploading'; this.error = null; this.emit();
       await this.loop();
     } catch (e) {
-      if (this.status !== 'cancelled' && this.status !== 'paused') { this.status = 'error'; this.error = e.message; this.emit(); }
+      if (this.status !== 'cancelled' && this.status !== 'paused') {
+        this.status = 'error';
+        this.error = e.message;
+        // Код показываем только когда он сам по себе что-то говорит и его нет в тексте
+        this.detail = e instanceof ApiError && e.status >= 400 ? `код ${e.status}` : '';
+        this.emit();
+      }
     }
   }
 
@@ -84,9 +109,16 @@ export class ChunkedUpload {
       xhr.setRequestHeader('Upload-Offset', String(offset));
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) { this.progress = (offset + e.loaded) / this.file.size; this.emit(); } };
       xhr.onload = () => {
-        let data = null; try { data = JSON.parse(xhr.responseText); } catch { /* ignore */ }
-        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-        else reject(new ApiError(xhr.status, data?.error || `Ошибка ${xhr.status}`, data));
+        let data = null, parsed = true;
+        try { data = JSON.parse(xhr.responseText); } catch { parsed = false; }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          // Успех обязан быть JSON со смещением: иначе часть приняли не мы, и докачка пойдёт вразнос
+          if (!parsed || typeof data?.offset !== 'number') {
+            reject(new ApiError(xhr.status, `Портал ответил на часть файла не по-своему (код ${xhr.status}). Похоже, ответ подменили прокси, VPN или антивирус.`, data));
+            return;
+          }
+          resolve(data);
+        } else reject(new ApiError(xhr.status, (parsed && data?.error) || `Ошибка ${xhr.status}`, data));
       };
       xhr.onerror = () => reject(new ApiError(0, 'Сетевая ошибка'));
       xhr.onabort = () => reject(new ApiError(0, 'Прервано'));

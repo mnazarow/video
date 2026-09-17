@@ -34,7 +34,7 @@ export const ICONS = {
   motion: mdi.mdiMotionPlay, monitorShare: mdi.mdiMonitor,
   // 1.1: корпоративные функции
   groups: mdi.mdiAccountGroupOutline, assignment: mdi.mdiClipboardCheckOutline, assignmentFill: mdi.mdiClipboardCheck, quiz: mdi.mdiHelpBox, quizOutline: mdi.mdiHelpBoxOutline,
-  note: mdi.mdiNoteEditOutline, noteFill: mdi.mdiNoteEdit, linkLock: mdi.mdiLinkLock, watermark: mdi.mdiWatermark, swap: mdi.mdiSwapHorizontal, sparkles: mdi.mdiCreation,
+  note: mdi.mdiNoteEditOutline, noteFill: mdi.mdiNoteEdit, linkLock: mdi.mdiLinkLock, watermark: mdi.mdiWatermark, swap: mdi.mdiSwapHorizontal, stethoscope: mdi.mdiStethoscope, sparkles: mdi.mdiCreation,
   record: mdi.mdiRecordRec, screenShare: mdi.mdiMonitorShare, importUrl: mdi.mdiCloudDownloadOutline, csv: mdi.mdiFileDelimitedOutline, clock: mdi.mdiClockAlertOutline,
   people: mdi.mdiAccountEyeOutline, install: mdi.mdiCellphoneArrowDown, history2: mdi.mdiBackupRestore, done: mdi.mdiCheckCircle, doneOutline: mdi.mdiCheckCircleOutline,
   progress: mdi.mdiProgressClock, chapters: mdi.mdiBookmarkMultipleOutline, lightbulb: mdi.mdiLightbulbOnOutline, clipboardList: mdi.mdiClipboardListOutline,

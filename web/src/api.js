@@ -7,14 +7,26 @@ export class ApiError extends Error {
   }
 }
 
+/** Короткая выжимка из неожиданного ответа — чтобы её можно было показать человеку и переслать администратору. */
+function describeBody(text, type) {
+  const head = String(text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const kind = /html/i.test(type) ? 'HTML-страница' : type ? `тип ${type.split(';')[0]}` : 'без типа';
+  return head ? `${kind}: «${head}»` : kind;
+}
+
 async function handle(res) {
   const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  const type = res.headers.get('content-type') || '';
+  let data = null, parsed = true;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; parsed = false; }
   if (!res.ok) {
-    const message = data?.error || data?.message || `Ошибка ${res.status}`;
+    // Ошибку без JSON тоже не прячем: часто это страница прокси, антивируса или балансировщика
+    const message = (parsed && (data?.error || data?.message)) || (text && !parsed ? `Ошибка ${res.status}. Ответ пришёл не от портала — ${describeBody(text, type)}` : `Ошибка ${res.status}`);
     throw new ApiError(res.status, message, data);
   }
+  // Успешный ответ обязан быть JSON. Если это не так, между браузером и порталом кто-то подменил ответ
+  // (прокси, VPN, антивирус, страница входа в корпоративную сеть) — молча продолжать нельзя.
+  if (!parsed) throw new ApiError(res.status, `Портал ответил не по-своему (код ${res.status}). Скорее всего ответ подменили прокси, VPN или антивирус — ${describeBody(text, type)}`, data);
   return data;
 }
 

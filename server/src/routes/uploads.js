@@ -149,6 +149,22 @@ async function isLocalHost(host) {
   } catch { return false; }
 }
 
+/** Найти загрузку пользователя. Промах пишем в журнал: по жалобе «Загрузка не найдена»
+ *  без этой строки не понять, ушёл ли клиент по мусорному адресу (например /api/uploads/undefined). */
+async function findUpload(req) {
+  const id = req.params.id;
+  if (!isUuid(id)) {
+    req.log.warn({ uploadId: String(id).slice(0, 80), route: `${req.method} ${req.url}`, userId: req.user?.id }, 'обращение к загрузке по некорректному идентификатору');
+    throw notFound('Загрузка не найдена');
+  }
+  const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+  if (!u) {
+    req.log.warn({ uploadId: id, route: `${req.method} ${req.url}`, userId: req.user?.id }, 'загрузка не найдена или принадлежит другому пользователю');
+    throw notFound('Загрузка не найдена');
+  }
+  return u;
+}
+
 export default async function uploadRoutes(app) {
   // Сырой поток для чанков
   app.addContentTypeParser('application/offset+octet-stream', (req, payload, done) => done(null, payload));
@@ -198,9 +214,7 @@ export default async function uploadRoutes(app) {
 
   // 2. Состояние (для возобновления)
   app.get('/:id', { preHandler: app.requireActive }, async (req) => {
-    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
-    const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
-    if (!u) throw notFound('Загрузка не найдена');
+    const u = await findUpload(req);
     let offset = u.received_bytes;
     try { offset = (await fsp.stat(u.tmp_path)).size; } catch { offset = u.status === 'completed' ? u.size : 0; }
     return { uploadId: u.id, videoId: u.video_id, offset, size: u.size, status: u.status, chunkSize: chunkSizeFor(u.size) };
@@ -208,9 +222,7 @@ export default async function uploadRoutes(app) {
 
   // 3. Принять часть (PATCH, заголовок Upload-Offset)
   app.patch('/:id', { preHandler: app.requireActive, bodyLimit: 80 * 1024 * 1024 }, async (req, reply) => {
-    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
-    const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
-    if (!u) throw notFound('Загрузка не найдена');
+    const u = await findUpload(req);
     if (u.status !== 'active') throw conflict('Загрузка уже завершена или отменена');
     const offset = parseInt(req.headers['upload-offset'] ?? req.query.offset ?? '0', 10);
     let current = 0;
@@ -237,9 +249,7 @@ export default async function uploadRoutes(app) {
 
   // 4. Завершить
   app.post('/:id/complete', { preHandler: app.requireActive }, async (req) => {
-    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
-    const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
-    if (!u) throw notFound('Загрузка не найдена');
+    const u = await findUpload(req);
     if (u.status === 'completed') {
       const v = await one('SELECT * FROM videos WHERE id = $1', [u.video_id]);
       return { ok: true, video: videoCard(v) };
@@ -255,9 +265,7 @@ export default async function uploadRoutes(app) {
 
   // 5. Отменить
   app.delete('/:id', { preHandler: app.requireActive }, async (req) => {
-    if (!isUuid(req.params.id)) throw notFound('Загрузка не найдена');
-    const u = await one('SELECT * FROM uploads WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
-    if (!u) throw notFound('Загрузка не найдена');
+    const u = await findUpload(req);
     if (u.status === 'active') {
       await query(`UPDATE uploads SET status = 'aborted', updated_at = now() WHERE id = $1`, [u.id]);
       await removeFile(u.tmp_path);

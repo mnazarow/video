@@ -2493,6 +2493,36 @@ test('запись экрана: раскладка «камера крупно�
   assert.ok(circle.y + circle.h <= 1080, 'круглая врезка не выходит за кадр');
 });
 
+test('загрузка: обращение по чужому и мусорному идентификатору — всегда «не найдена»', async () => {
+  // Клиент, потерявший идентификатор, раньше уходил на /api/uploads/undefined и получал ошибку типа из базы
+  for (const id of ['undefined', 'null', 'NaN', '123', '../../etc/passwd']) {
+    const g = await admin.get(`/api/uploads/${encodeURIComponent(id)}`);
+    assert.equal(g.status, 404, `GET ${id}: ${g.text}`);
+    assert.match(g.json.error, /не найдена/i);
+    const c = await admin.post(`/api/uploads/${encodeURIComponent(id)}/complete`, {});
+    assert.equal(c.status, 404, `complete ${id}: ${c.text}`);
+    const d = await admin.del(`/api/uploads/${encodeURIComponent(id)}`);
+    assert.equal(d.status, 404, `delete ${id}: ${d.text}`);
+  }
+  // Правильный по виду, но несуществующий идентификатор — тоже 404, а не ошибка базы
+  const ghost = await admin.get('/api/uploads/0f8fad5b-d9cb-469f-a165-70867728950e');
+  assert.equal(ghost.status, 404);
+
+  // Чужая загрузка не видна даже администратору: иначе докачка перетирала бы чужой файл
+  const mine = await user.post('/api/uploads', { filename: 'чужая.mp4', size: 1048576, mime: 'video/mp4', visibility: 'private' });
+  assert.equal(mine.status, 200, mine.text);
+  try {
+    const alien = await admin.get(`/api/uploads/${mine.json.uploadId}`);
+    assert.equal(alien.status, 404, 'чужая загрузка не отдаётся');
+    const own = await user.get(`/api/uploads/${mine.json.uploadId}`);
+    assert.equal(own.status, 200, 'своя — отдаётся');
+    assert.equal(own.json.offset, 0);
+  } finally {
+    await user.del(`/api/uploads/${mine.json.uploadId}`);
+    await user.del(`/api/videos/${mine.json.videoId}`);
+  }
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);
