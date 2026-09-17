@@ -29,7 +29,9 @@ export class ChunkedUpload {
   emit() { this.onChange(this); }
 
   async init() {
-    const r = await post('/api/uploads', { filename: this.file.name, size: this.file.size, mime: this.file.type, ...this.meta });
+    // Косая черта обязательна: без неё nginx с блоком «location /api/uploads/» отвечает 301,
+    // а браузер на 301 превращает POST в GET и теряет тело запроса.
+    const r = await post('/api/uploads/', { filename: this.file.name, size: this.file.size, mime: this.file.type, ...this.meta });
     // Без идентификатора продолжать нельзя: иначе следующий запрос уйдёт на /api/uploads/undefined
     // и человек увидит непонятное «Загрузка не найдена» вместо настоящей причины.
     if (!r || !UUID_RE.test(String(r.uploadId || ''))) {

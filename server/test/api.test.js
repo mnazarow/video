@@ -1265,8 +1265,10 @@ test('вебинары: регистрация, присутствие, отчё
 });
 
 test('качество воспроизведения: приём метрик и сводка', async () => {
-  const vlist = await admin.get('/api/studio/videos?limit=5');
+  // Берём с запасом: если недавние загрузки ещё обрабатываются, готовое видео найдётся дальше по списку
+  const vlist = await admin.get('/api/studio/videos?limit=50');
   const v = (vlist.json.videos || []).find((x) => x.status === 'ready');
+  assert.ok(v, 'в студии есть хотя бы одно готовое видео');
   const key = `t${Date.now().toString(36)}qoe`;
   const p1 = await user.post('/api/playback', { sessionKey: key, videoId: v.id, startupMs: 700, watchSec: 10, rebufferCount: 1, rebufferMs: 500, qualityHeight: 720, bitrateKbps: 2000, started: true, device: 'mobile', browser: 'chrome', source: 'watch' });
   assert.equal(p1.status, 200, p1.text);
@@ -2531,6 +2533,38 @@ test('здоровье: метка экземпляра постоянна и п
   assert.equal(b2.json.instance, a.json.instance, 'пока процесс жив, метка не меняется');
   assert.equal(a.json.status, 'ok');
   assert.equal(a.json.db, 'ok');
+});
+
+test('загрузка: адрес создания работает и с косой чертой, и без неё', async () => {
+  // Клиент ходит на канонический /api/uploads/ — именно на него настроен блок nginx.
+  // Адрес без косой черты тоже обязан работать: им пользуются интеграции по API.
+  for (const url of ['/api/uploads/', '/api/uploads']) {
+    const r = await admin.post(url, { filename: 'адрес.mp4', size: 1048576, mime: 'video/mp4', visibility: 'private' });
+    assert.equal(r.status, 200, `${url}: ${r.text}`);
+    assert.match(String(r.json.uploadId), /^[0-9a-f-]{36}$/, `${url}: вернулся идентификатор`);
+    await admin.del(`/api/uploads/${r.json.uploadId}`);
+    await admin.del(`/api/videos/${r.json.videoId}`);
+  }
+  // Пустой идентификатор (так выглядит GET /api/uploads/ после перенаправления) — понятный отказ, не ошибка базы
+  const empty = await admin.get('/api/uploads/');
+  assert.equal(empty.status, 404, empty.text);
+});
+
+test('nginx: у адресов API с косой чертой есть точный location, иначе браузер теряет POST', async () => {
+  // Префиксный location, оканчивающийся на «/», вместе с proxy_pass заставляет nginx отвечать 301
+  // на запрос ровно этого адреса без косой черты; браузер на 301 превращает POST в GET и теряет тело.
+  // Для статики (alias/root) это безобидно, поэтому проверяем только проксируемые адреса API.
+  const tpl = fs.readFileSync(new URL('../../deploy/nginx/locations.conf.template', import.meta.url), 'utf8');
+  assert.match(tpl, /location\s*=\s*\/api\/uploads\s*\{/, 'в шаблоне есть «location = /api/uploads»');
+
+  const blocks = [...tpl.matchAll(/location\s+(\/api\/\S*\/)\s*\{([^}]*)\}/g)];
+  assert.ok(blocks.length, 'нашлись проксируемые location для API');
+  for (const [, prefix, body] of blocks) {
+    if (!/proxy_pass/.test(body)) continue;
+    const bare = prefix.slice(0, -1);
+    const exact = new RegExp(`location\\s*=\\s*${bare.replace(/\//g, '\\/')}\\s*\\{`);
+    assert.ok(exact.test(tpl), `для «location ${prefix}» нужен точный «location = ${bare}», иначе nginx отвечает 301 и POST превращается в GET`);
+  }
 });
 
 test('удаление видео владельцем', async () => {

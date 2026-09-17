@@ -84,10 +84,18 @@ async function runSelfTest() {
 
     // 2. Создание загрузки
     try {
-      const r = await post('/api/uploads', { filename: 'проверка-связи.mp4', size: chunk, mime: 'video/mp4', visibility: 'private' });
+      const r = await post('/api/uploads/', { filename: 'проверка-связи.mp4', size: chunk, mime: 'video/mp4', visibility: 'private' });
       uploadId = r.uploadId; chunk = Math.min(r.chunkSize || chunk, chunk);
       step('Создание загрузки', true, `идентификатор …${String(uploadId).slice(-12)}, часть ${fmtBytes(chunk)}`);
     } catch (e) { step('Создание загрузки', false, e.message); throw e; }
+
+    // Отдельно проверяем адрес без косой черты: именно на нём nginx отвечает 301,
+    // а браузер на 301 превращает POST в GET и теряет тело запроса
+    try {
+      const probe = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: '{}' });
+      if (probe.redirected) step('Адрес без косой черты', false, `веб-сервер перенаправляет на ${probe.url}. Добавьте в nginx точный блок «location = /api/uploads» и перезапустите его (или выполните обновление портала).`);
+      else step('Адрес без косой черты', true, 'перенаправления нет');
+    } catch (e) { step('Адрес без косой черты', false, e.message); }
 
     // 3. Чтение только что созданной загрузки — отделяет «запись пропала» от «часть не доходит»
     try {

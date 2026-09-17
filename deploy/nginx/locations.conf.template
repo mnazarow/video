@@ -53,6 +53,13 @@ location /internal-media/ {
 }
 
 # --- Загрузка видео: чанки и простая загрузка ---------------------------------------------------
+# ВАЖНО: префиксный location, оканчивающийся на «/», вместе с proxy_pass заставляет nginx отвечать
+# постоянным перенаправлением (301) на запрос ровно этого адреса без косой черты. Браузер на 301
+# превращает POST в GET и теряет тело — создание загрузки молча ломалось. Поэтому для адреса без
+# косой черты нужен точный location (см. документацию nginx к директиве location).
+location = /api/uploads {
+  proxy_pass http://corpvideo_api;
+}
 location /api/uploads/simple {
   client_max_body_size 0;
   proxy_request_buffering off;

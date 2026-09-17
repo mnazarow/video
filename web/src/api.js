@@ -30,11 +30,18 @@ async function handle(res) {
   return data;
 }
 
+/** Запрос к API не должен никуда перенаправляться: на 301 браузер превращает POST в GET и теряет тело. */
+function checkRedirect(res, method, url) {
+  if (!res.redirected || method === 'GET') return;
+  throw new ApiError(0, `Запрос ${method} ${url} был перенаправлен веб-сервером на ${res.url}. При перенаправлении браузер теряет тело запроса. Это ошибка настройки nginx: для адреса без косой черты нужен точный location.`, null);
+}
+
 export async function api(method, url, body, { signal, headers = {} } = {}) {
   const opts = { method, headers: { ...headers }, signal, credentials: 'same-origin' };
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch(url, opts);
+  checkRedirect(res, method, url);
   return handle(res);
 }
 
