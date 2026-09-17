@@ -23,6 +23,7 @@ export class ChunkedUpload {
     this._lastBytes = 0;
     this._lastTime = 0;
     this.detail = '';
+    this._reinited = false;
   }
 
   emit() { this.onChange(this); }
@@ -79,6 +80,16 @@ export class ChunkedUpload {
         } catch (e) {
           if (this.status !== 'uploading') return;
           if (e instanceof ApiError && e.status === 409 && e.data?.offset !== undefined) { this.offset = e.data.offset; break; }
+          // Начатой загрузки на сервере вдруг нет: пробуем завести её заново — один раз, чтобы не ходить по кругу.
+          // Если и после этого 404, значит запрос уходит не туда, где загрузка была создана.
+          if (e instanceof ApiError && e.status === 404 && this.offset === 0 && !this._reinited) {
+            this._reinited = true;
+            await this.init();
+            continue;
+          }
+          if (e instanceof ApiError && e.status === 404 && this._reinited) {
+            throw new ApiError(404, 'Загрузка пропадает сразу после создания. Так бывает, когда на один адрес отвечают несколько экземпляров портала. Нажмите «Проверить загрузку» и покажите результат администратору.', e.data);
+          }
           if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) throw e;
           attempt++;
           if (attempt > 6) throw e;

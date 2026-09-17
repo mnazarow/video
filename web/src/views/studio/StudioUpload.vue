@@ -69,17 +69,38 @@ async function runSelfTest() {
   testOpen.value = true; testRunning.value = true; testSteps.value = []; testVerdict.value = '';
   let uploadId = null, chunk = 8 * 1024 * 1024, ok = false;
   try {
+    // 1. Связь. Спрашиваем портал трижды: если отвечают разные экземпляры, загрузка по частям невозможна
     try {
-      const h = await get('/api/health');
-      step('Связь с порталом', true, h?.version ? `версия ${h.version}` : 'ответ получен');
-    } catch (e) { step('Связь с порталом', false, e.message); throw e; }
+      const probes = [];
+      for (let i = 0; i < 3; i++) probes.push(await get('/api/health'));
+      const instances = [...new Set(probes.map((h) => h.instance || 'без метки'))];
+      const versions = [...new Set(probes.map((h) => h.version))];
+      if (instances.length > 1) {
+        step('Связь с порталом', false, `на один адрес отвечают ${instances.length} разных экземпляра портала (версии: ${versions.join(', ')}). Загрузка по частям так работать не может: часть уходит не туда, где загрузка создана. Оставьте один экземпляр или настройте «липкие» сессии на балансировщике.`);
+        throw new Error('несколько экземпляров');
+      }
+      step('Связь с порталом', true, `версия ${versions[0]}, экземпляр один`);
+    } catch (e) { if (!testSteps.value.length) step('Связь с порталом', false, e.message); throw e; }
 
+    // 2. Создание загрузки
     try {
       const r = await post('/api/uploads', { filename: 'проверка-связи.mp4', size: chunk, mime: 'video/mp4', visibility: 'private' });
       uploadId = r.uploadId; chunk = Math.min(r.chunkSize || chunk, chunk);
-      step('Создание загрузки', true, `часть ${fmtBytes(chunk)}`);
+      step('Создание загрузки', true, `идентификатор …${String(uploadId).slice(-12)}, часть ${fmtBytes(chunk)}`);
     } catch (e) { step('Создание загрузки', false, e.message); throw e; }
 
+    // 3. Чтение только что созданной загрузки — отделяет «запись пропала» от «часть не доходит»
+    try {
+      let found = 0, lastErr = '';
+      for (let i = 0; i < 3; i++) {
+        try { await get(`/api/uploads/${uploadId}`); found++; } catch (e) { lastErr = e.message; }
+      }
+      if (found === 3) step('Чтение созданной загрузки', true, '3 из 3 — запись на месте');
+      else if (found === 0) { step('Чтение созданной загрузки', false, `ни разу не нашлась (${lastErr}). Запись исчезает сразу после создания — похоже, запросы попадают на разные экземпляры портала или в разные базы.`); throw new Error('запись пропала'); }
+      else { step('Чтение созданной загрузки', false, `нашлась ${found} раза из 3 (${lastErr}). Запросы попадают то на один, то на другой сервер — нужны «липкие» сессии или один экземпляр портала.`); throw new Error('через раз'); }
+    } catch (e) { if (!testSteps.value.some((x) => x.name.startsWith('Чтение'))) step('Чтение созданной загрузки', false, e.message); throw e; }
+
+    // 4. Отправка части — ровно тем же способом, что и настоящий файл (XHR)
     try {
       const body = new Blob([new Uint8Array(chunk)]);
       const res = await new Promise((resolve, reject) => {
@@ -92,10 +113,13 @@ async function runSelfTest() {
         xhr.send(body);
       });
       let data = null; try { data = JSON.parse(res.text); } catch { /* не JSON */ }
-      if (res.status >= 200 && res.status < 300 && typeof data?.offset === 'number') step(`Отправка части ${fmtBytes(chunk)}`, true, `принято ${fmtBytes(data.offset)}`);
-      else if (res.status === 413) { step(`Отправка части ${fmtBytes(chunk)}`, false, 'часть не пропустил веб-сервер (413). Увеличьте client_max_body_size для /api/uploads/ в nginx'); throw new Error('413'); }
-      else if (!data) { step(`Отправка части ${fmtBytes(chunk)}`, false, `код ${res.status}, ответ не от портала (${res.type.split(';')[0] || 'без типа'}) — похоже на прокси, VPN или антивирус`); throw new Error('не JSON'); }
-      else { step(`Отправка части ${fmtBytes(chunk)}`, false, data.error || `код ${res.status}`); throw new Error('часть'); }
+      const name = `Отправка части ${fmtBytes(chunk)}`;
+      if (res.status >= 200 && res.status < 300 && typeof data?.offset === 'number') step(name, true, `принято ${fmtBytes(data.offset)}`);
+      else if (res.status === 413) { step(name, false, 'часть не пропустил веб-сервер (413). Увеличьте client_max_body_size для /api/uploads/ в nginx и в промежуточных прокси'); throw new Error('413'); }
+      else if (res.status === 401) { step(name, false, 'запрос ушёл без входа (401). Cookie не доходит — проверьте прокси и антивирус, которые режут заголовки'); throw new Error('401'); }
+      else if (res.status === 404) { step(name, false, 'загрузка не найдена (404), хотя минуту назад читалась. Часть уходит не на тот сервер, где загрузка создана'); throw new Error('404'); }
+      else if (!data) { step(name, false, `код ${res.status}, ответ не от портала (${res.type.split(';')[0] || 'без типа'}) — похоже на прокси, VPN или антивирус`); throw new Error('не JSON'); }
+      else { step(name, false, data.error || `код ${res.status}`); throw new Error('часть'); }
     } catch (e) { if (!testSteps.value.some((x) => x.name.startsWith('Отправка'))) step('Отправка части', false, e.message); throw e; }
 
     ok = true;

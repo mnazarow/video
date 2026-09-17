@@ -21,11 +21,16 @@ export default async function miscRoutes(app) {
     };
   });
 
+  // Метка экземпляра: постоянна, пока процесс жив. Если на один адрес отвечают несколько
+  // экземпляров портала (осталась служба от прежней установки, балансировщик на два сервера),
+  // это сразу видно по разным меткам — а загрузка по частям при этом работать не может.
+  const INSTANCE = `${process.pid.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
   app.get('/health', async (req, reply) => {
     let db = 'ok';
     try { await pool.query('SELECT 1'); } catch (e) { db = 'error: ' + e.message; }
     if (db !== 'ok') reply.code(503); // для систем мониторинга
-    return { status: db === 'ok' ? 'ok' : 'degraded', db, version: config.version, uptime: Math.round(process.uptime()) };
+    return { status: db === 'ok' ? 'ok' : 'degraded', db, version: config.version, uptime: Math.round(process.uptime()), instance: INSTANCE };
   });
 
   // --- Уведомления --------------------------------------------------------------

@@ -1,6 +1,6 @@
 {
   "name": "corpvideo-web",
-  "version": "1.10.3",
+  "version": "1.10.4",
   "description": "CorpVideo — веб-интерфейс корпоративного видеохостинга",
   "type": "module",
   "private": true,

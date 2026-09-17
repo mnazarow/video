@@ -2523,6 +2523,16 @@ test('загрузка: обращение по чужому и мусорном
   }
 });
 
+test('здоровье: метка экземпляра постоянна и позволяет заметить второй сервер', async () => {
+  const a = await guest.get('/api/health');
+  assert.equal(a.status, 200, a.text);
+  assert.ok(a.json.instance, 'метка экземпляра есть в ответе');
+  const b2 = await guest.get('/api/health');
+  assert.equal(b2.json.instance, a.json.instance, 'пока процесс жив, метка не меняется');
+  assert.equal(a.json.status, 'ok');
+  assert.equal(a.json.db, 'ok');
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);
