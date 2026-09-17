@@ -2450,6 +2450,49 @@ test('загрузка: предел 2 ТБ, размер части и усто
   assert.equal(bogus.status, 404, 'мусорный идентификатор загрузки не доходит до базы');
 });
 
+test('запись экрана: раскладка «камера крупно» и врезка в углу', async () => {
+  const { coverCrop, insetRect, insetFraction, layoutSources } = await import('../../web/src/utils/record.js');
+
+  // Камера 4:3 в кадре 16:9 — берём центральную полосу по высоте, без полей и искажений
+  const c = coverCrop(640, 480, 1920, 1080);
+  assert.equal(Math.round(c.sw), 640, 'по ширине источник берётся целиком');
+  assert.equal(Math.round(c.sh), 360, 'по высоте обрезается до 16:9');
+  assert.ok(c.sx === 0 && Math.round(c.sy) === 60, 'обрезка симметрична по центру');
+  const same = coverCrop(1920, 1080, 1280, 720);
+  assert.ok(same.sw === 1920 && same.sh === 1080, 'одинаковые пропорции — без обрезки');
+
+  // Врезка не выходит за кадр и уходит в выбранный угол
+  const br = insetRect(1920, 1080, 'br');
+  assert.ok(br.x + br.w <= 1920 && br.y + br.h <= 1080, 'врезка внутри кадра');
+  assert.equal(Math.round(br.w / br.h * 100) / 100, 1.78, 'врезка 16:9');
+  const tl = insetRect(1920, 1080, 'tl');
+  assert.ok(tl.x < br.x && tl.y < br.y, 'левый верхний угол левее и выше правого нижнего');
+  const bl = insetRect(1920, 1080, 'bl');
+  assert.ok(bl.x === tl.x && bl.y === br.y);
+  const tiny = insetRect(320, 180, 'br');
+  assert.ok(tiny.x >= 0 && tiny.y >= 0 && tiny.w > 0, 'на маленьком кадре врезка остаётся видимой');
+
+  // Переключение раскладки меняет местами крупный план и врезку
+  const screen = { id: 'screen' }, camera = { id: 'camera' };
+  const a = layoutSources('screen-main', { screen, camera });
+  assert.ok(a.main === screen && a.inset === camera, 'экран крупно, камера в углу');
+  const b = layoutSources('cam-main', { screen, camera });
+  assert.ok(b.main === camera && b.inset === screen, 'камера крупно, экран в углу');
+  const d = layoutSources(undefined, { screen, camera });
+  assert.ok(d.main === screen, 'без раскладки — привычный «экран крупно»');
+
+  // Размер и форма врезки
+  assert.ok(insetFraction('sm') < insetFraction('md') && insetFraction('md') < insetFraction('lg'));
+  assert.equal(insetFraction('что-то'), insetFraction('md'), 'неизвестный размер — обычный');
+  const lg = insetRect(1920, 1080, 'br', insetFraction('lg'));
+  const sm = insetRect(1920, 1080, 'br', insetFraction('sm'));
+  assert.ok(lg.w > sm.w && lg.x < sm.x, 'крупная врезка шире и начинается левее');
+  assert.ok(lg.x + lg.w === sm.x + sm.w, 'правый край врезки не зависит от размера');
+  const circle = insetRect(1920, 1080, 'br', 0.22, 24, 1);
+  assert.equal(circle.w, circle.h, 'круглая врезка вписана в квадрат');
+  assert.ok(circle.y + circle.h <= 1080, 'круглая врезка не выходит за кадр');
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);
