@@ -50,6 +50,8 @@ export const router = createRouter({
     { path: '/embed/:id', name: 'embed', component: v('EmbedView'), meta: { embed: true } },
     // 1.6: комната совместного просмотра и витрина для телевизора в холле
     { path: '/party/:code', name: 'party', component: v('PartyView'), meta: { active: true } },
+    // «Скачанные» открываются и без сети: список и файлы лежат на устройстве
+    { path: '/offline', name: 'offline', component: v('OfflineView') },
     { path: '/screen/:token', name: 'screen', component: v('ScreenView'), meta: { embed: true } },
     {
       path: '/studio', component: v('studio/StudioLayout'), meta: { active: true },
@@ -101,6 +103,8 @@ router.beforeEach(async (to) => {
   const auth = useAuth();
   if (!auth.loaded) await auth.load();
   const needsAuth = to.matched.some((r) => r.meta.auth || r.meta.active || r.meta.staff || r.meta.admin);
+  // Без сети не отправляем на страницу входа: она всё равно не откроется, а «Скачанные» работают
+  if (needsAuth && !auth.user && typeof navigator !== 'undefined' && navigator.onLine === false) return { name: 'offline' };
   if (needsAuth && !auth.user) return { name: 'login', query: { next: to.fullPath } };
   if (to.matched.some((r) => r.meta.active || r.meta.staff || r.meta.admin) && auth.user && auth.user.status !== 'active') return { name: 'account-status' };
   if (to.matched.some((r) => r.meta.staff) && !auth.isStaff) return { name: 'home' };

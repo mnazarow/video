@@ -13,6 +13,7 @@ import EmptyState from '../../components/EmptyState.vue';
 import ChannelAvatar from '../../components/ChannelAvatar.vue';
 import { copyWithToast } from '../../utils/clipboard.js';
 import QuizEditor from '../../components/studio/QuizEditor.vue';
+import ScenarioEditor from '../../components/studio/ScenarioEditor.vue';
 import ShareLinks from '../../components/studio/ShareLinks.vue';
 import AiAssistant from '../../components/studio/AiAssistant.vue';
 import AttachmentsEditor from '../../components/studio/AttachmentsEditor.vue';
@@ -34,7 +35,7 @@ const saving = ref(false);
 const dirty = ref(false);
 const player = ref(null);
 const tab = computed(() => route.params.tab || 'details');
-const TABS = [['details', 'Сведения', 'edit'], ['thumbnail', 'Миниатюра', 'image'], ['chapters', 'Главы', 'listStatus'], ['subtitles', 'Субтитры', 'subtitles'], ['editor', 'Редактор', 'scissors'], ['cards', 'Подсказки', 'cards'], ['attachments', 'Материалы', 'inventory'], ['quiz', 'Тест', 'quizOutline'], ['access', 'Доступ', 'lock'], ['analytics', 'Аналитика', 'analytics']];
+const TABS = [['details', 'Сведения', 'edit'], ['thumbnail', 'Миниатюра', 'image'], ['chapters', 'Главы', 'listStatus'], ['subtitles', 'Субтитры', 'subtitles'], ['editor', 'Редактор', 'scissors'], ['cards', 'Подсказки', 'cards'], ['attachments', 'Материалы', 'inventory'], ['quiz', 'Тест', 'quizOutline'], ['scenario', 'Тренажёр', 'dots'], ['access', 'Доступ', 'lock'], ['analytics', 'Аналитика', 'analytics']];
 const SOURCES = { home: 'Главная', search: 'Поиск', subscriptions: 'Подписки', channel: 'Канал', playlist: 'Плейлист', related: 'Похожие', direct: 'Прямая ссылка', embed: 'Встраивание', notification: 'Уведомление', trending: 'Тренды', library: 'Библиотека', external: 'Внешние сайты', share: 'Поделиться' };
 const DEVICES = { desktop: 'Компьютер', mobile: 'Телефон', tablet: 'Планшет', tv: 'ТВ' };
 let off = [];
@@ -288,6 +289,11 @@ async function removeTrack(t) {
     <!-- Тест -->
     <div v-else-if="tab === 'quiz'" class="panel">
       <QuizEditor :video="video" :player="player" @changed="video.hasQuiz = $event" />
+    </div>
+
+    <!-- Тренажёр с ветвлением (1.7) -->
+    <div v-else-if="tab === 'scenario'">
+      <ScenarioEditor :video="video" :player="player" @changed="video.hasScenario = $event" />
     </div>
 
     <!-- Миниатюра -->

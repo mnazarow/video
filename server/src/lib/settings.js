@@ -56,6 +56,13 @@ export const DEFAULTS = {
   'screens.enabled': true,              // экраны-витрины для телевизоров
   'seo.video': true,                    // разметка schema.org и карта сайта для публичных видео
   'notify.video_watched': true,         // уведомлять автора о просмотре личной записи
+  // 1.7 — итоги встречи, автоклипы, тренажёры, офлайн
+  'meeting.notes_enabled': true,        // ИИ-конспект записи: решения, задачи, темы (нужен ИИ)
+  'clips.ai_enabled': true,             // ИИ предлагает фрагменты для клипов (нужен ИИ)
+  'scenario.enabled': true,             // тренажёры с ветвлением в видео
+  'offline.enabled': true,              // скачивание видео для просмотра без сети (PWA)
+  'offline.max_mb': 2048,               // сколько мегабайт можно держать офлайн на устройстве
+  'offline.days': 30,                   // через сколько дней скачанное устаревает
   // Загрузка и обработка
   'upload.max_size_mb': 8192,
   'upload.allowed_extensions': ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'mpg', 'mpeg', 'wmv', 'flv', 'ts', 'mts', '3gp', 'ogv'],
@@ -370,6 +377,12 @@ export async function publicSettings() {
     liveCaptions: s['live.captions'] && s['asr.enabled'],
     screensEnabled: s['screens.enabled'],
     videoSeo: s['seo.video'],
+    meetingNotes: s['meeting.notes_enabled'] && s['ai.enabled'],
+    clipsAi: s['clips.ai_enabled'] && s['ai.enabled'],
+    scenarioEnabled: s['scenario.enabled'],
+    offlineEnabled: s['offline.enabled'],
+    offlineMaxMb: s['offline.max_mb'],
+    offlineDays: s['offline.days'],
   };
 }
 

@@ -16,6 +16,7 @@ import { runSubtitleTranslate } from './jobs/translate.js';
 import { runOcr } from './lib/ocr.js';
 import { runAudioTrack } from './jobs/platform.js';
 import { runLiveCaptions } from './jobs/captions.js';
+import { runMeetingNotes, runClipsAi } from './jobs/meeting.js';
 import { deliverWebhook } from './lib/webhooks.js';
 import { sendXapi } from './lib/xapi.js';
 import { telegramNotify, pollUpdates as telegramPoll } from './lib/telegram.js';
@@ -46,6 +47,9 @@ const HANDLERS = {
   audio_track: runAudioTrack,
   // 1.6
   live_captions: runLiveCaptions,
+  // 1.7
+  meeting_notes: runMeetingNotes,
+  clips_ai: runClipsAi,
   webhook_deliver: deliverWebhook,
   xapi_send: sendXapi,
 };
@@ -53,7 +57,7 @@ const HANDLERS = {
 // Тяжёлые задания (ffmpeg) ограничены concurrency; лёгкие (письма) выполняются отдельным слотом.
 const HEAVY = new Set(['transcode', 'thumbnails', 'subtitles_asr', 'live_import', 'recompute_storage', 'import_url', 'video_edit', 'remove_silence', 'clip_create', 'ocr', 'audio_track']);
 // Долгие сетевые задания (ИИ, RAG): процессор не занимают, но и письма с вебхуками задерживать не должны — отдельная полоса.
-const SLOW = new Set(['ai_enrich', 'rag_push', 'subtitle_translate', 'live_captions']);
+const SLOW = new Set(['ai_enrich', 'rag_push', 'subtitle_translate', 'live_captions', 'meeting_notes', 'clips_ai']);
 const QUICK_TYPES = () => Object.keys(HANDLERS).filter((t) => !HEAVY.has(t) && !SLOW.has(t));
 const running = new Map(); // jobId → { abort }
 let stopping = false;

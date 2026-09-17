@@ -32,8 +32,12 @@ export const useAuth = defineStore('auth', {
         this.assignmentsPending = me.assignmentsPending || 0;
         this.watchLaterId = me.watchLaterId || null;
         this.config = cfg;
+        try { localStorage.setItem('cv.config', JSON.stringify(cfg)); } catch { /* приватный режим */ }
       } catch (e) {
-        console.error('auth load failed', e);
+        // Без сети берём последние известные настройки: нужны разделу «Скачанные»
+        try { const cached = localStorage.getItem('cv.config'); if (cached && !this.config) this.config = JSON.parse(cached); } catch { /* ignore */ }
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) console.info('Сети нет — доступны скачанные видео');
+        else console.error('auth load failed', e);
       } finally {
         this.loaded = true;
       }

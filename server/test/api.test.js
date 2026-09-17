@@ -1610,6 +1610,114 @@ test('живые субтитры эфира и видео-SEO', async () => {
   assert.ok(robots.text.includes('Disallow: /admin'), 'админка закрыта от роботов');
 });
 
+test('тренажёр с ветвлением: настройка, выбор зрителя, отчёт и права', async () => {
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready' && Number(x.duration) > 3);
+  assert.ok(v, 'нужно готовое видео');
+
+  const saved = await admin.put(`/api/videos/${v.id}/scenario`, {
+    title: 'Действия при утечке', active: true, showResult: true,
+    points: [
+      { id: 'p1', at: 2, text: 'Обнаружена утечка. Что делать первым?', options: [
+        { id: 'o1', text: 'Перекрыть задвижку', goto: 5, feedback: 'Верно', correct: true },
+        { id: 'o2', text: 'Уйти с объекта', goto: 8, feedback: 'Так нельзя', correct: false },
+      ] },
+      { id: 'bad', at: 1, text: 'Развилка без вариантов', options: [{ id: 'x', text: 'Один' }] },
+    ],
+  });
+  assert.equal(saved.status, 200, saved.text);
+  assert.equal(saved.json.scenario.points.length, 1, 'развилка без двух вариантов отброшена');
+
+  // Зритель не видит, какой вариант правильный, пока не выберет
+  const asViewer = await user.get(`/api/videos/${v.shortId}/scenario`);
+  assert.equal(asViewer.status, 200, asViewer.text);
+  assert.equal(asViewer.json.scenario.points[0].options[0].correct, undefined, 'правильность скрыта от зрителя');
+  assert.equal(asViewer.json.scenario.points[0].options[0].feedback, undefined, 'пояснение скрыто до выбора');
+
+  // Выбор возвращает переход и разбор
+  const pick = await user.post(`/api/videos/${v.id}/scenario/choice`, { pointId: 'p1', optionId: 'o2' });
+  assert.equal(pick.status, 200, pick.text);
+  assert.equal(pick.json.goto, 8, 'переход на нужную секунду');
+  assert.equal(pick.json.correct, false);
+  assert.equal(pick.json.feedback, 'Так нельзя');
+  const wrong = await user.post(`/api/videos/${v.id}/scenario/choice`, { pointId: 'p1', optionId: 'нет' });
+  assert.equal(wrong.status, 400, 'несуществующий вариант отклонён');
+
+  // Отчёт автору; зритель его не видит
+  const rep = await admin.get(`/api/videos/${v.id}/scenario/report`);
+  assert.equal(rep.status, 200, rep.text);
+  assert.ok(rep.json.totals.choices >= 1, 'выбор учтён');
+  assert.ok(rep.json.totals.mistakes >= 1, 'ошибка видна автору');
+  const o2 = rep.json.points[0].options.find((o) => o.id === 'o2');
+  assert.ok(o2.count >= 1 && o2.percent > 0, 'распределение по вариантам');
+  const byUser = await user.get(`/api/videos/${v.id}/scenario/report`);
+  assert.equal(byUser.status, 403, 'отчёт только автору и модераторам');
+  const byUserEdit = await user.put(`/api/videos/${v.id}/scenario`, { points: [] });
+  assert.equal(byUserEdit.status, 403, 'чужой тренажёр не настроить');
+
+  // Выключенный тренажёр зрителю не отдаётся
+  await admin.put(`/api/videos/${v.id}/scenario`, { title: 'Действия при утечке', active: false, points: saved.json.scenario.points });
+  const off = await user.get(`/api/videos/${v.shortId}/scenario`);
+  assert.equal(off.json.scenario, null, 'выключенный тренажёр скрыт');
+  const card = await user.get(`/api/videos/${v.shortId}`);
+  assert.equal(card.json.video.hasScenario, false, 'флаг снят');
+});
+
+test('итоги встречи и автоклипы: разбор ответа модели и границы', async () => {
+  const { normalizeNotes, normalizeClips, toSeconds, transcriptText } = await import('../src/jobs/meeting.js');
+
+  // Таймкоды в разных форматах
+  assert.equal(toSeconds('01:05'), 65);
+  assert.equal(toSeconds('1:02:03'), 3723);
+  assert.equal(toSeconds(42), 42);
+  assert.equal(toSeconds('ерунда'), 0);
+
+  // Итоги: обрезка по длительности, отсев пустого
+  const notes = normalizeNotes({
+    summary: 'Кратко о планёрке',
+    topics: [{ at: '00:30', title: 'Заявки', text: '' }, { at: '99:00', title: '', text: '' }],
+    decisions: [{ at: '01:05', text: 'Согласуем в 1С' }, { at: '00:10', text: '' }],
+    tasks: [{ at: '01:40', text: 'Инструкция', who: 'Иван', due: 'до 25-го' }],
+    questions: [{ at: '02:10', text: 'Кто замещает?' }],
+  }, 100);
+  assert.equal(notes.decisions.length, 1, 'пустое решение отброшено');
+  assert.equal(notes.topics.length, 1, 'тема без текста и названия отброшена');
+  assert.equal(notes.topics[0].text, 'Заявки', 'текст темы берётся из названия');
+  assert.equal(notes.tasks[0].who, 'Иван');
+  assert.ok(notes.decisions[0].at <= 100, 'таймкод не выходит за длительность');
+
+  // Клипы: отсев коротких и выходящих за пределы, сортировка по оценке
+  const clips = normalizeClips({ clips: [
+    { start: '00:20', end: '01:10', title: 'Инструкция', reason: 'Готово к отправке', score: 70 },
+    { start: '00:00', end: '00:05', title: 'Короткий', score: 90 },
+    { start: '02:00', end: '02:40', title: 'За пределами', score: 95 },
+    { start: '00:30', end: '01:30', title: 'Лучший', score: 88 },
+  ] }, 100);
+  assert.equal(clips.length, 2, 'остались только пригодные фрагменты');
+  assert.equal(clips[0].title, 'Лучший', 'сортировка по оценке');
+  assert.ok(clips.every((c) => c.end - c.start >= 10 && c.end <= 100));
+
+  // Расшифровка с таймкодами укладывается в лимит
+  const segs = Array.from({ length: 500 }, (_, i) => ({ start: i * 2, end: i * 2 + 2, text: `Реплика номер ${i} про работу` }));
+  const text = transcriptText({ segments: segs }, 2000);
+  assert.ok(text.length <= 2600, 'текст прорежен до лимита');
+  assert.ok(/^\[\d{2}:\d{2}\]/.test(text), 'таймкоды сохранены');
+
+  // Права и проверки маршрутов
+  const vlist = await admin.get('/api/studio/videos?limit=10');
+  const v = (vlist.json.videos || []).find((x) => x.status === 'ready');
+  const byUser = await user.post(`/api/videos/${v.id}/meeting-notes`, {});
+  assert.equal(byUser.status, 403, 'итоги делает автор или модератор');
+  const suggByUser = await user.get(`/api/videos/${v.id}/clip-suggestions`);
+  assert.equal(suggByUser.status, 403, 'предложения видны автору');
+  const short = await admin.post(`/api/videos/${v.id}/clip-suggestions`, {});
+  assert.ok([200, 400].includes(short.status), 'для коротких видео — понятный отказ');
+  if (short.status === 400) assert.match(short.json.error, /коротких|расшифровк|отключен/i);
+  const notesGet = await admin.get(`/api/videos/${v.shortId}/meeting-notes`);
+  assert.equal(notesGet.status, 200, notesGet.text);
+  assert.equal(typeof notesGet.json.enabled, 'boolean');
+});
+
 test('удаление видео владельцем', async () => {
   const r = await user.del(`/api/videos/${videoId}`);
   assert.equal(r.status, 200);

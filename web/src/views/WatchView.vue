@@ -22,9 +22,12 @@ import Modal from '../components/Modal.vue';
 import QuizOverlay from '../components/watch/QuizOverlay.vue';
 import NotesPanel from '../components/watch/NotesPanel.vue';
 import PremiereChat from '../components/watch/PremiereChat.vue';
+import MeetingNotes from '../components/watch/MeetingNotes.vue';
+import ScenarioOverlay from '../components/watch/ScenarioOverlay.vue';
 import ViewerWatermark from '../components/watch/ViewerWatermark.vue';
 import AssignDialog from '../components/AssignDialog.vue';
 import { fmtViews, fmtNumber, fmtDate, fmtDateTime, fmtSubs, fmtDuration, VISIBILITY } from '../utils/format.js';
+import { saveOffline, removeOffline, isOffline, offlineSupported } from '../utils/offline.js';
 
 const route = useRoute();
 const router = useRouter();
@@ -131,6 +134,30 @@ async function loadPremiere(seq = loadSeq) {
       }, 1000);
     }
   } catch { premiere.value = null; }
+}
+
+// --- Офлайн-просмотр (1.7) ---------------------------------------------------------------------
+const offline = ref({ saved: false, progress: 0, busy: false });
+function refreshOffline() { offline.value.saved = !!video.value && isOffline(video.value.id); }
+async function toggleOffline() {
+  if (!video.value || offline.value.busy) return;
+  if (offline.value.saved) {
+    await removeOffline(video.value.id);
+    refreshOffline();
+    ui.toast('Видео удалено с устройства');
+    return;
+  }
+  offline.value.busy = true;
+  offline.value.progress = 0;
+  try {
+    await saveOffline(video.value, {
+      days: Number(auth.config?.offlineDays) || 30,
+      maxBytes: (Number(auth.config?.offlineMaxMb) || 0) * 1024 * 1024,
+      onProgress: (p) => { offline.value.progress = p; },
+    });
+    refreshOffline();
+    ui.toast('Видео доступно без сети — раздел «Скачанные»', { type: 'success' });
+  } catch (e) { ui.toast(e.message, { type: 'error' }); } finally { offline.value.busy = false; }
 }
 
 // --- Совместный просмотр (1.6) ----------------------------------------------------------------
@@ -293,7 +320,7 @@ async function load() {
     else startAt.value = Number.isFinite(t) && t > 0 ? t : (r.video.viewer?.position && r.video.viewer.position > 5 ? r.video.viewer.position : 0);
     source.value = detectSource();
     get(`/api/videos/${r.video.shortId}/related?limit=20`).then((x) => { if (isCurrentLoad(seq)) related.value = x.videos; }).catch(() => {});
-    loadAttachments(seq); loadClips(seq); loadEngage(seq); loadCourseCtx(seq); loadPremiere(seq);
+    loadAttachments(seq); loadClips(seq); loadEngage(seq); loadCourseCtx(seq); loadPremiere(seq); refreshOffline();
     screenOpen.value = route.query.panel === 'screen' && !!r.video.hasScreenText;
     chatReplayOpen.value = route.query.panel === 'chat' && !!r.video.hasChatReplay;
     if (route.query.list) get(`/api/playlists/${route.query.list}?limit=200`).then((p) => { if (isCurrentLoad(seq)) playlist.value = p; }).catch(() => { if (isCurrentLoad(seq)) playlist.value = null; });
@@ -411,6 +438,7 @@ onBeforeUnmount(() => { clearInterval(premiereTimer); clearInterval(countdownTim
               <ViewerWatermark v-if="watermarkText" :text="watermarkText" />
               <CardsOverlay v-if="(video.cards?.length || video.endScreen) && !endScreen && !attention.visible && !clipDone" :video="video" :player="player" :ended="ended" />
               <QuizOverlay v-if="video.hasQuiz && auth.isActive" ref="quizRef" :video="video" :player="player" :ended="ended" @passed="onQuizPassed" @state="quizState = $event" />
+              <ScenarioOverlay v-if="video.hasScenario && auth.isActive && auth.config?.scenarioEnabled !== false" ref="scenarioRef" :video="video" :player="player" :active="!attention.visible" />
               <div v-if="attention.visible" class="end-screen" @click.stop>
                 <div class="es-card" style="text-align:center"><Icon name="accountClock" :size="40" /><div class="es-title mt-8">Вы ещё смотрите?</div><div class="small" style="opacity:.8">Обязательный просмотр с контролем присутствия — подтвердите, чтобы продолжить</div><div class="row mt-16" style="justify-content:center"><button class="btn primary" @click="confirmAttention"><Icon name="play" :size="18" /> Да, продолжить</button></div></div>
               </div>
@@ -442,6 +470,7 @@ onBeforeUnmount(() => { clearInterval(premiereTimer); clearInterval(countdownTim
             <span v-if="premiereWaiting || premiereLive" class="badge brand" style="vertical-align: middle; margin-right: 8px"><Icon name="sparkles" :size="12" /> Премьера</span>{{ video.title }}
           </h1>
           <PremiereChat v-if="premiere?.chatEnabled && (premiereWaiting || premiereLive)" :video="video" :compact="premiereLive" class="mb-16" />
+          <MeetingNotes v-if="auth.isActive && auth.config?.meetingNotes !== false && video.status === 'ready' && (video.hasNotes || video.viewer?.isOwner || auth.isStaff)" :video="video" :player="player" class="mb-16" />
           <div class="watch-row">
             <div class="row gap-16 watch-owner">
               <router-link :to="`/@${video.owner.handle}`"><ChannelAvatar :user="video.owner" size="lg" /></router-link>
@@ -465,6 +494,12 @@ onBeforeUnmount(() => { clearInterval(premiereTimer); clearInterval(countdownTim
               <Dropdown>
                 <template #trigger><button class="ibtn soft-round"><Icon name="moreH" /></button></template>
                 <button v-if="auth.isActive" class="item" @click="toggleWatchLater"><Icon class="ic" name="watchLater" :size="20" /> {{ video.viewer?.inWatchLater ? 'Убрать из «Смотреть позже»' : 'Смотреть позже' }}</button>
+                <button v-if="auth.isActive && auth.config?.offlineEnabled !== false && video.mp4Url && offlineSupported()" class="item" :disabled="offline.busy" @click="toggleOffline">
+                  <Icon class="ic" :name="offline.saved ? 'done' : 'install'" :size="20" />
+                  <template v-if="offline.busy">Скачиваю… {{ offline.progress }}%</template>
+                  <template v-else-if="offline.saved">Убрать с устройства</template>
+                  <template v-else>Скачать для офлайна</template>
+                </button>
                 <a v-if="video.allowDownload && auth.isActive && video.mp4Url" class="item" :href="downloadUrl('mp4')"><Icon class="ic" name="download" :size="20" /> Скачать MP4 (сжатое)</a>
                 <a v-if="video.allowDownload && auth.isActive && video.originalAvailable" class="item" :href="downloadUrl('')"><Icon class="ic" name="download" :size="20" /> Скачать оригинал</a>
                 <button v-if="video.viewer?.isOwner || auth.isStaff" class="item" @click="router.push(`/studio/videos/${video.id}`)"><Icon class="ic" name="edit" :size="20" /> Редактировать</button>

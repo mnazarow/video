@@ -38,6 +38,7 @@ import webinarRoutes from './routes/webinar.js';
 import playbackRoutes from './routes/playback.js';
 import roomRoutes from './routes/rooms.js';
 import screenRoutes from './routes/screens.js';
+import meetingRoutes from './routes/meeting.js';
 import quizRoutes from './routes/quiz.js';
 import noteRoutes from './routes/notes.js';
 import shareRoutes from './routes/share.js';
@@ -127,6 +128,7 @@ export async function buildApp({ logger = true } = {}) {
   await app.register(playbackRoutes, { prefix: '/api' });
   await app.register(roomRoutes, { prefix: '/api' });
   await app.register(screenRoutes, { prefix: '/api' });
+  await app.register(meetingRoutes, { prefix: '/api' });
   await app.register(quizRoutes, { prefix: '/api' });
   await app.register(noteRoutes, { prefix: '/api' });
   await app.register(shareRoutes, { prefix: '/api' });

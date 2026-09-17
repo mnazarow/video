@@ -127,6 +127,8 @@ export function videoFull(v, { renditions = [], subtitles = [], viewer = null, u
     watchSeconds: v.watch_seconds || 0,
     commentsMode: v.comments_mode,
     premiereChat: !!v.premiere_chat,
+    hasScenario: !!v.has_scenario,
+    hasNotes: !!v.has_notes,
     allowDownload: !!v.allow_download,
     introEnd: v.intro_end != null ? Number(v.intro_end) : null,
     outroStart: v.outro_start != null ? Number(v.outro_start) : null,

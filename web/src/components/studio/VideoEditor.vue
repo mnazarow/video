@@ -21,11 +21,44 @@ const silence = ref({ noiseDb: -35, minSec: 1.5, keepSec: 0.3 });
 const silenceResult = ref(null);
 const clip = ref({ start: '0:00', end: '0:30', title: '', vertical: false, visibility: 'private' });
 const activeJob = ref(null);
+// 1.7: ИИ предлагает фрагменты для клипов (как OpusClip и Vizard)
+const sugg = ref({ enabled: false, suggestions: [], suggestedAt: null });
+const suggBusy = ref(false);
+let suggPoll = null;
 let timer = null;
 
 const duration = computed(() => Number(props.video.duration) || 0);
 const OPS = { trim: 'Обрезка', cut: 'Вырезание фрагментов', remove_silence: 'Удаление пауз', edit: 'Монтаж' };
 const JOB_TYPES = { video_edit: 'Монтаж', remove_silence: 'Паузы', clip_create: 'Клип', ocr: 'Текст на экране', subtitle_translate: 'Перевод субтитров' };
+
+async function loadSuggestions() {
+  try { sugg.value = await get(`/api/videos/${props.video.id}/clip-suggestions`); } catch { /* ignore */ }
+}
+async function suggestClips() {
+  suggBusy.value = true;
+  try {
+    await post(`/api/videos/${props.video.id}/clip-suggestions`, {});
+    ui.toast('ИИ читает расшифровку — предложения появятся здесь');
+    let tries = 0;
+    clearInterval(suggPoll);
+    suggPoll = setInterval(async () => {
+      tries += 1;
+      await loadSuggestions();
+      if (sugg.value.suggestions.length || tries > 30) { clearInterval(suggPoll); suggBusy.value = false; }
+    }, 3000);
+  } catch (e) { ui.toast(e.message, { type: 'error' }); suggBusy.value = false; }
+}
+function useSuggestion(x) {
+  clip.value.start = fmtDuration(x.start);
+  clip.value.end = fmtDuration(x.end);
+  clip.value.title = x.title;
+  props.player?.seekTo?.(x.start);
+  ui.toast('Границы клипа подставлены — проверьте и нажмите «Создать клип»');
+}
+async function dismissSuggestion(x) {
+  try { await fetch(`/api/videos/${props.video.id}/clip-suggestions/${x.id}`, { method: 'DELETE', credentials: 'include' }); } catch { /* ignore */ }
+  sugg.value.suggestions = sugg.value.suggestions.filter((s) => s.id !== x.id);
+}
 
 async function load() {
   loading.value = true;
@@ -38,8 +71,8 @@ async function load() {
     if (running) track(running.id); else activeJob.value = null;
   } catch (e) { ui.toast(e.message, { type: 'error' }); } finally { loading.value = false; }
 }
-onMounted(load);
-onBeforeUnmount(() => clearInterval(timer));
+onMounted(() => { load(); loadSuggestions(); });
+onBeforeUnmount(() => { clearInterval(timer); clearInterval(suggPoll); });
 watch(() => props.video.version, load);
 
 function track(jobId) {
@@ -168,6 +201,25 @@ function seek(s) { props.player?.seekTo(s); }
           <label class="switch"><input type="checkbox" v-model="clip.vertical" /><span class="track"></span><span>Вертикальный 9:16 (для ленты коротких)</span></label>
           <button class="btn primary sm" :disabled="!!busy || video.status !== 'ready'" @click="makeClip"><Icon name="shorts" :size="16" /> Создать клип</button>
         </div>
+        <!-- Предложения ИИ (1.7) -->
+        <div v-if="sugg.enabled && auth.config?.clipsAi !== false" class="ai-clips mt-12">
+          <div class="row gap-8" style="align-items:center">
+            <b class="small grow"><Icon name="sparkles" :size="16" style="vertical-align:-3px" /> ИИ предложит фрагменты</b>
+            <button class="btn sm" :disabled="suggBusy || video.status !== 'ready' || duration < 60" @click="suggestClips">
+              <template v-if="suggBusy"><span class="spin sm"></span> Подбираю…</template>
+              <template v-else><Icon name="sparkles" :size="16" /> {{ sugg.suggestions.length ? 'Подобрать заново' : 'Предложить клипы' }}</template>
+            </button>
+          </div>
+          <p v-if="duration < 60" class="tiny muted mt-4">Для видео короче минуты предложения не нужны.</p>
+          <p v-else class="tiny muted mt-4">Портал читает расшифровку и находит законченные фрагменты: инструкцию, объяснение, объявление — как OpusClip и Vizard.</p>
+          <div v-for="x in sugg.suggestions" :key="x.id" class="ai-clip">
+            <button class="ai-clip-at" @click="player?.seekTo?.(x.start)">{{ fmtDuration(x.start) }}–{{ fmtDuration(x.end) }}</button>
+            <div class="grow"><b class="small">{{ x.title }}</b><div class="tiny muted">{{ x.reason }}</div></div>
+            <span class="tiny muted nowrap">{{ x.score }}%</span>
+            <button class="btn sm soft" @click="useSuggestion(x)"><Icon name="scissors" :size="16" /> В клип</button>
+            <button class="ibtn sm" title="Убрать" @click="dismissSuggestion(x)"><Icon name="close" :size="16" /></button>
+          </div>
+        </div>
         <div v-if="state.clips.length" class="mt-12"><div class="label mb-8">Клипы из этого видео</div><div class="clip-list"><VideoCard v-for="c in state.clips" :key="c.id" :video="c" :show-status="true" /></div></div>
       </section>
     </div>
@@ -196,6 +248,11 @@ function seek(s) { props.player?.seekTo(s); }
 </template>
 
 <style>
+.ai-clips { border-top: 1px dashed var(--line-2); padding-top: 12px; }
+.ai-clip { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line-2); }
+.ai-clip:last-child { border-bottom: 0; }
+.ai-clip-at { color: var(--brand); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; }
+
 .editor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
 .editor-grid .panel { margin: 0; }
 .clip-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }

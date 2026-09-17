@@ -36,6 +36,7 @@ const library = [
   { to: '/certificates', icon: 'verified', label: 'Сертификаты', certs: true },
   { to: '/history', icon: 'history', label: 'История' },
   { to: '/watch-later', icon: 'watchLater', label: 'Смотреть позже' },
+  { to: '/offline', icon: 'download', label: 'Скачанные', offline: true },
   { to: '/liked', icon: 'thumbUp', label: 'Понравившиеся' },
 ];
 </script>
@@ -51,7 +52,7 @@ const library = [
       <template v-if="auth.isActive">
         <div class="sb-group">
           <div class="sb-title">Библиотека</div>
-          <router-link v-for="m in library.filter((x) => !x.certs || auth.config?.certificatesEnabled !== false)" :key="m.to" :to="m.to" class="sb-item"><Icon :name="m.icon" /><span>{{ m.label }}</span><b v-if="m.badge === 'assignments' && auth.assignmentsPending" class="sb-badge">{{ auth.assignmentsPending }}</b></router-link>
+          <router-link v-for="m in library.filter((x) => (!x.certs || auth.config?.certificatesEnabled !== false) && (!x.offline || auth.config?.offlineEnabled !== false))" :key="m.to" :to="m.to" class="sb-item"><Icon :name="m.icon" /><span>{{ m.label }}</span><b v-if="m.badge === 'assignments' && auth.assignmentsPending" class="sb-badge">{{ auth.assignmentsPending }}</b></router-link>
         </div>
         <div class="sb-group" v-if="subs.length">
           <div class="sb-title">Подписки</div>

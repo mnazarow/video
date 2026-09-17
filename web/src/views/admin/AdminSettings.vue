@@ -442,6 +442,18 @@ const blockedWords = computed({ get: () => (s.value['comments.blocked_words'] ||
             <label class="switch mb-16"><input type="checkbox" v-model="s['seo.video']" /><span class="track"></span><span>Разметка и карта сайта для публичных видео (видео-SEO)</span></label>
             <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('premiere.'), ...prefix('party.'), ...prefix('screens.'), ...prefix('seo.'), 'live.captions', 'notify.video_watched'])">Сохранить</button></div>
           </div>
+          <div class="panel"><h3 class="mb-8"><Icon name="clipboardList" :size="20" style="vertical-align:-4px" /> Итоги встречи, автоклипы, тренажёры и офлайн</h3>
+            <p class="small muted">Итоги встречи и автоклипы разбирают расшифровку записи через подключённую языковую модель (нужен включённый ИИ-помощник). Тренажёр с ветвлением останавливает видео и предлагает выбрать действие. Офлайн — скачивание видео на устройство для просмотра без сети.</p>
+            <label class="switch"><input type="checkbox" v-model="s['meeting.notes_enabled']" /><span class="track"></span><span>Итоги встречи: решения, задачи, темы</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['clips.ai_enabled']" /><span class="track"></span><span>ИИ предлагает фрагменты для клипов</span></label>
+            <label class="switch"><input type="checkbox" v-model="s['scenario.enabled']" /><span class="track"></span><span>Тренажёры с ветвлением</span></label>
+            <label class="switch mb-16"><input type="checkbox" v-model="s['offline.enabled']" /><span class="track"></span><span>Офлайн-просмотр (скачивание на устройство)</span></label>
+            <div class="form-grid">
+              <div class="field"><label>Сколько мегабайт можно держать офлайн</label><input class="input" type="number" min="128" max="65536" v-model.number="s['offline.max_mb']" /></div>
+              <div class="field"><label>Через сколько дней скачанное устаревает</label><input class="input" type="number" min="1" max="365" v-model.number="s['offline.days']" /></div>
+            </div>
+            <div class="form-actions"><button class="btn primary" :disabled="saving" @click="save([...prefix('meeting.'), ...prefix('clips.'), ...prefix('scenario.'), ...prefix('offline.')])">Сохранить</button></div>
+          </div>
           <div class="panel"><h3 class="mb-8"><Icon name="tune" :size="20" style="vertical-align:-4px" /> Плеер и доступность</h3>
             <p class="small muted">Кнопка «Пропустить вступление» появляется, если у видео заданы границы заставки (студия → «Сведения»). Размер субтитров и подложку зритель настраивает сам в меню плеера.</p>
             <label class="switch"><input type="checkbox" v-model="s['player.skip_intro']" /><span class="track"></span><span>Кнопка «Пропустить вступление»</span></label>
